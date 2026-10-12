@@ -1,0 +1,200 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import { repositorioEnMemoria } from "../datos/memoria";
+import type { Repositorio } from "../datos/repositorio";
+import type { Mensaje, Transaccion } from "../tipos";
+import { abrir, anular, confirmar, descartar, editar, recibir, type Sesion } from "./conversacion";
+
+const HOY = "2026-10-11";
+
+let repo: Repositorio;
+let sesion: Sesion;
+let ultimo: Mensaje | null;
+
+/** Manda un mensaje y devuelve lo que contestó Fia. */
+async function decir(texto: string) {
+  const novedad = await recibir(sesion, texto, ultimo);
+  ultimo = novedad.mensajes.at(-1) ?? ultimo;
+  return { fia: novedad.mensajes.at(-1)!, transaccion: novedad.transacciones[0] as Transaccion | undefined };
+}
+
+/** Manda un movimiento completo y lo confirma. */
+async function anotar(texto: string) {
+  const { transaccion } = await decir(texto);
+  return confirmar(sesion, transaccion!.id);
+}
+
+beforeEach(async () => {
+  repo = repositorioEnMemoria();
+  const abierta = await abrir(repo);
+  sesion = { ...abierta.sesion, hoy: () => HOY };
+  ultimo = abierta.mensajes.at(-1) ?? null;
+});
+
+describe("presentación", () => {
+  it("la primera vez Fia se presenta y pregunta el nombre", async () => {
+    expect(ultimo?.datos.clase).toBe("pide_nombre");
+    const { fia } = await decir("me llamo Juan Pedro");
+    expect(fia.texto).toContain("Un gusto, Juan Pedro");
+    expect((await repo.perfil()).nombre).toBe("Juan Pedro");
+  });
+
+  it("si en vez del nombre llega un gasto, lo toma como gasto", async () => {
+    const { fia, transaccion } = await decir("taxi 3200");
+    expect(fia.datos.clase).toBe("propuesta");
+    expect(transaccion?.centavos).toBe(320000);
+    expect((await repo.perfil()).nombre).toBeNull();
+  });
+
+  it("al volver, no se presenta de nuevo", async () => {
+    const otraVez = await abrir(repo);
+    expect(otraVez.mensajes).toHaveLength(1);
+  });
+});
+
+describe("anotar un movimiento", () => {
+  it("lo propone en revisión y recién cuenta al confirmarlo", async () => {
+    const { fia, transaccion } = await decir("gasté 4500 en almuerzo");
+    expect(fia.texto).toBe("¿Lo anoto así?");
+    expect(transaccion).toMatchObject({ estado: "en_revision", tipo: "gasto", centavos: 450000, categoriaId: "comida" });
+    expect(await repo.confirmadasEntre("2026-10-01", "2026-10-31")).toHaveLength(0);
+
+    const confirmado = await confirmar(sesion, transaccion!.id);
+    expect(confirmado.transacciones[0].estado).toBe("confirmada");
+    expect(confirmado.mensajes[0].texto).toBe("Anotado. Llevás $4.500 en Comida este mes.");
+  });
+
+  it("acumula el total de la categoría en el mes", async () => {
+    await anotar("gasté 4500 en almuerzo");
+    const segundo = await anotar("cena 12.000");
+    expect(segundo.mensajes[0].texto).toBe("Anotado. Llevás $16.500 en Comida este mes.");
+  });
+
+  it("descartar no deja nada en los totales", async () => {
+    const { transaccion } = await decir("gasté 4500 en almuerzo");
+    const descartado = await descartar(sesion, transaccion!.id);
+    expect(descartado.transacciones[0].estado).toBe("rechazada");
+    expect(await repo.ultimas(5)).toHaveLength(0);
+  });
+
+  it("editar guarda los cambios y confirma", async () => {
+    const { transaccion } = await decir("gasté 4500 en almuerzo");
+    const editado = await editar(sesion, transaccion!.id, { centavos: 520000, categoriaId: "entretenimiento" });
+    expect(editado.transacciones[0]).toMatchObject({ estado: "confirmada", centavos: 520000, categoriaId: "entretenimiento" });
+    expect(editado.mensajes[0].texto).toBe("Anotado. Llevás $5.200 en Entretenimiento este mes.");
+  });
+
+  it("anular lo saca de los totales sin borrarlo", async () => {
+    const { transacciones } = await anotar("gasté 4500 en almuerzo");
+    const anulado = await anular(sesion, transacciones[0].id);
+    expect(anulado.transacciones[0].estado).toBe("anulada");
+    expect(await repo.confirmadasEntre("2026-10-01", "2026-10-31")).toHaveLength(0);
+    expect(await repo.transaccionesPorId([transacciones[0].id])).toHaveLength(1);
+  });
+
+  it("avisa cuando parece repetido", async () => {
+    await anotar("gasté 4500 en almuerzo");
+    const { fia } = await decir("gasté 4500 en almuerzo");
+    expect(fia.datos).toMatchObject({ clase: "propuesta", aviso: "duplicado" });
+    expect(fia.texto).toContain("Ya tengo uno igual");
+  });
+
+  it("dos gastos distintos con el mismo importe no son repetidos", async () => {
+    await anotar("gasté 4500 en almuerzo");
+    const { fia } = await decir("taxi 4500");
+    expect(fia.datos).toEqual({ clase: "propuesta", transaccionId: expect.any(String) });
+  });
+
+  it("un ingreso cuenta cuánto entró en el mes", async () => {
+    const anotado = await anotar("cobré 250 lucas de sueldo");
+    expect(anotado.mensajes[0].texto).toBe("Anotado. Este mes entraron $250.000.");
+  });
+
+  it("con fecha de otro mes, lo dice", async () => {
+    const anotado = await anotar("gasté 4500 en almuerzo el 3 de septiembre");
+    expect(anotado.mensajes[0].texto).toBe("Anotado con fecha 3 de septiembre.");
+  });
+});
+
+describe("preguntas", () => {
+  it("pide el importe y completa con la respuesta", async () => {
+    expect((await decir("taxi")).fia.texto).toBe("¿Cuánto fue?");
+    const { fia, transaccion } = await decir("3200");
+    expect(fia.datos.clase).toBe("propuesta");
+    expect(transaccion).toMatchObject({ tipo: "gasto", centavos: 320000, categoriaId: "transporte", descripcion: "Taxi" });
+  });
+
+  it("pide el tipo cuando no hay cómo saberlo", async () => {
+    expect((await decir("4500 cosas")).fia.texto).toBe("¿Fue un gasto o un ingreso?");
+    const { transaccion } = await decir("gasto");
+    expect(transaccion).toMatchObject({ tipo: "gasto", centavos: 450000, descripcion: "Cosas" });
+  });
+
+  it("pregunta el sentido de una transferencia", async () => {
+    expect((await decir("transferencia 20000 Pedro")).fia.texto).toBe("Esa transferencia, ¿la enviaste o la recibiste?");
+    const { transaccion } = await decir("la recibí");
+    expect(transaccion).toMatchObject({ tipo: "transferencia_recibida", centavos: 2000000 });
+  });
+
+  it("con dos números, usa el elegido y su descripción", async () => {
+    const { fia } = await decir("2 cafés 4500");
+    expect(fia.texto).toBe("Veo más de un número. ¿Cuál es el importe?");
+    const { transaccion } = await decir("$4.500");
+    expect(transaccion).toMatchObject({ centavos: 450000, descripcion: "2 cafés", categoriaId: "comida", tipo: "gasto" });
+  });
+
+  it("primero el importe y después el tipo, si faltan los dos", async () => {
+    expect((await decir("gasté")).fia.texto).toBe("¿Cuánto fue?");
+    const { transaccion } = await decir("900");
+    expect(transaccion).toMatchObject({ tipo: "gasto", centavos: 90000 });
+  });
+
+  it("si la respuesta es otro mensaje, lo trata como nuevo", async () => {
+    await decir("taxi");
+    const { transaccion } = await decir("gasté 900 en café");
+    expect(transaccion).toMatchObject({ centavos: 90000, categoriaId: "comida" });
+  });
+});
+
+describe("consultas", () => {
+  beforeEach(async () => {
+    await anotar("gasté 4500 en almuerzo");
+    await anotar("taxi 3200");
+    await anotar("pagué 120.000 de alquiler");
+    await anotar("cobré 250 lucas de sueldo");
+    await anotar("me transfirieron 30000");
+    await decir("gasté 99999 en cine"); // queda en revisión: no cuenta
+  });
+
+  it("el resumen suma solo lo confirmado", async () => {
+    const { fia } = await decir("resumen del mes");
+    expect(fia.datos).toMatchObject({
+      clase: "resumen",
+      resumen: {
+        entradas: 28000000,
+        salidas: 12770000,
+        porCategoria: [
+          { nombre: "Vivienda", centavos: 12000000 },
+          { nombre: "Comida", centavos: 450000 },
+          { nombre: "Transporte", centavos: 320000 },
+        ],
+      },
+    });
+  });
+
+  it("gastos por categoría", async () => {
+    expect((await decir("gastos; transporte; este mes")).fia.texto).toBe("En Transporte gastaste $3.200 en octubre, en 1 movimiento.");
+    expect((await decir("cuánto gasté en salud hoy")).fia.texto).toBe("No anoté gastos de Salud hoy.");
+  });
+
+  it("últimos movimientos y deshacer", async () => {
+    const ultimos = await decir("últimos");
+    expect(ultimos.fia.datos).toMatchObject({ clase: "lista" });
+    const deshacer = await decir("borrá el último");
+    expect(deshacer.fia.datos.clase).toBe("propuesta");
+    expect(deshacer.transaccion?.estado).toBe("confirmada");
+  });
+
+  it("un período sin movimientos lo dice claro", async () => {
+    expect((await decir("resumen del mes pasado")).fia.texto).toBe("No anoté nada en septiembre.");
+  });
+});

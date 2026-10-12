@@ -30,8 +30,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files: .env solo tiene valores públicos y sí se sube
 .env*
+!.env
 
 # vercel
 .vercel
@@ -39,3 +40,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# grafo de conocimiento local
+/graphify-out/
