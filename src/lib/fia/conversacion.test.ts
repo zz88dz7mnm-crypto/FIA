@@ -272,7 +272,12 @@ describe("capturas", () => {
       ["transferencia_recibida", 1250000, "en_revision"],
       ["gasto", 320000, "en_revision"],
     ]);
-    expect(novedad.transacciones[2].categoriaId).toBe("entretenimiento");
+    // La categoría es el tipo de operación que dice la captura.
+    expect(novedad.transacciones.map((t) => [t.categoriaId, t.contraparte])).toEqual([
+      ["transferencias", "Kiosco El Sol"],
+      ["transferencias", "Pedro Gomez"],
+      ["qr", "Cine Gaumont"],
+    ]);
     // Nada cuenta hasta confirmar.
     expect(await repo.confirmadasEntre("2026-10-01", "2026-10-31")).toHaveLength(0);
   });
@@ -297,9 +302,80 @@ describe("capturas", () => {
     expect(otraVez.mensajes[0].datos).toMatchObject({ avisos: { [repetida.id]: ["sin_fecha", "duplicado"] } });
   });
 
+  it("los movimientos entre tus frascos se anotan pero no cuentan en los totales", async () => {
+    await decir("Juan Pedro");
+    const billetera = [
+      "02 de octubre", "— Transferencia enviada - $ 1.200,00", "Valentin Torres Gaitan",
+      "02 de octubre", "— Rendimiento diario + $ 1,69",
+      "01 de octubre", "— — Transferencia enviada - $ 60.000,00", "Ameijeiras Juan Pedro",
+      "01 de octubre", "— Dinero agregado a Frasco - $ 40.000,00", "Fondo",
+    ].join("\n");
+    const { transacciones, mensajes } = await recibirCaptura(sesion, billetera);
+    expect(transacciones.map((t) => [t.categoriaId, t.interna])).toEqual([
+      ["transferencias", false],
+      ["rendimientos", false],
+      ["propias", true],
+      ["propias", true],
+    ]);
+    expect(mensajes[0].datos).toMatchObject({ avisos: { [transacciones[2].id]: ["propia"], [transacciones[3].id]: ["propia"] } });
+
+    await confirmarVarios(sesion, transacciones.map((t) => t.id));
+    const { fia } = await decir("resumen del mes");
+    expect(fia.datos).toMatchObject({ clase: "resumen", resumen: { entradas: 169, salidas: 120000 } });
+  });
+
+  it("una transferencia cargada por texto va a Transferencias, con la persona", async () => {
+    const { transaccion } = await decir("transferí 12000 a Marta");
+    expect(transaccion).toMatchObject({ categoriaId: "transferencias", contraparte: "Marta" });
+  });
+
   it("si la imagen no trae importes, lo dice y no crea nada", async () => {
     const novedad = await recibirCaptura(sesion, "Foto de un gato\n14:32");
     expect(novedad.mensajes[0].texto).toContain("No encontré ningún movimiento");
     expect(novedad.transacciones).toHaveLength(0);
+  });
+});
+
+describe("/borrar-todo", () => {
+  beforeEach(async () => {
+    await anotar("gasté 4500 en almuerzo");
+    await anotar("taxi 3200");
+    await anotar("gasté 9000 en cine el 3 de septiembre");
+    await decir("frasco facu 20000");
+  });
+
+  it("pide confirmación y no borra nada hasta que digas que sí", async () => {
+    const { fia } = await decir("/borrar-todo");
+    expect(fia.texto).toContain("Vas a borrar todo octubre: 2 movimientos");
+    expect(fia.datos).toEqual({ clase: "confirmar_borrado", desde: "2026-10-01", hasta: "2026-10-31" });
+    expect(await repo.movimientosEntre("2026-10-01", "2026-10-31")).toHaveLength(2);
+  });
+
+  it("con un no, deja todo como estaba", async () => {
+    await decir("/borrar-todo");
+    expect((await decir("No, dejar todo")).fia.texto).toBe("Listo, no borré nada.");
+    expect(await repo.movimientosEntre("2026-10-01", "2026-10-31")).toHaveLength(2);
+  });
+
+  it("con un sí, borra solo ese mes y avisa que hay que recargar", async () => {
+    await decir("/borrar-todo");
+    const novedad = await recibir(sesion, "Sí, borrar octubre", ultimo);
+    expect(novedad.recargar).toBe(true);
+    expect(novedad.mensajes[0].texto).toBe("Borré todo octubre: 2 movimientos. Arrancamos de cero.");
+    expect(await repo.movimientosEntre("2026-10-01", "2026-10-31")).toHaveLength(0);
+    expect(await repo.movimientosEntre("2026-09-01", "2026-09-30")).toHaveLength(1);
+    expect(sesion.frascos).toHaveLength(0);
+  });
+
+  it("una frase parecida no dispara el borrado", async () => {
+    expect((await decir("borrar todo")).fia.datos.clase).not.toBe("confirmar_borrado");
+    expect((await decir("quiero /borrar-todo ya")).fia.datos.clase).not.toBe("confirmar_borrado");
+  });
+
+  it("si después de la pregunta llega otra cosa, sigue de largo sin borrar", async () => {
+    await decir("/borrar-todo");
+    const { transaccion } = await decir("gasté 900 en café");
+    expect(transaccion).toMatchObject({ centavos: 90000 });
+    expect(await repo.movimientosEntre("2026-10-01", "2026-10-31")).toHaveLength(3);
   });
 });

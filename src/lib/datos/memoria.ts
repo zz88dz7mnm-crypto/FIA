@@ -46,7 +46,10 @@ export function repositorioEnMemoria(): Repositorio {
         descripcion: nueva.descripcion,
         categoriaId: nueva.categoriaId,
         frascoId: nueva.frascoId ?? null,
+        contraparte: nueva.contraparte ?? null,
+        interna: nueva.interna ?? false,
         referencia: nueva.referencia ?? null,
+        metodo: nueva.metodo ?? "texto",
         estado: "en_revision",
         creadoEn: ahora(),
       };
@@ -67,7 +70,7 @@ export function repositorioEnMemoria(): Repositorio {
     },
     async confirmadasEntre(desde, hasta) {
       return transacciones
-        .filter((t) => t.estado === "confirmada" && t.fecha >= desde && t.fecha <= hasta)
+        .filter((t) => t.estado === "confirmada" && !t.interna && t.fecha >= desde && t.fecha <= hasta)
         .map((t) => ({ ...t }));
     },
     async ultimas(limite) {
@@ -76,6 +79,22 @@ export function repositorioEnMemoria(): Repositorio {
         .sort((a, b) => b.fecha.localeCompare(a.fecha) || b.creadoEn.localeCompare(a.creadoEn))
         .slice(0, limite)
         .map((t) => ({ ...t }));
+    },
+    async movimientosEntre(desde, hasta) {
+      return transacciones
+        .filter((t) => t.fecha >= desde && t.fecha <= hasta)
+        .sort((a, b) => b.fecha.localeCompare(a.fecha) || b.creadoEn.localeCompare(a.creadoEn))
+        .map((t) => ({ ...t }));
+    },
+    async borrarMes(desde, hasta) {
+      // En memoria no hay fechas reales de creación: se borra el chat entero y todos los frascos.
+      const quedan = transacciones.filter((t) => t.fecha < desde || t.fecha > hasta);
+      const movimientos = transacciones.length - quedan.length;
+      transacciones.splice(0, transacciones.length, ...quedan.map((t) => ({ ...t, frascoId: null })));
+      mensajes.length = 0;
+      frascos.length = 0;
+      aportes.length = 0;
+      return { movimientos };
     },
     async frascos() {
       return frascos.map((f) => ({

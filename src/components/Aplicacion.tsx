@@ -7,14 +7,15 @@ import { repositorioSupabase } from "@/lib/datos/supabase";
 import { Chat } from "./Chat";
 import { Fia } from "./Fia";
 import { Ingreso } from "./Ingreso";
+import { Panel } from "./Panel";
 
 type Estado =
   | { paso: "cargando" }
   | { paso: "sin_sesion" }
-  | { paso: "lista"; clave: string; repo: Repositorio; salir?: () => void };
+  | { paso: "lista"; clave: string; repo: Repositorio; salir: () => void };
 
-/** Decide qué mostrar: la espera, la entrada o el chat. */
-export function Aplicacion() {
+/** Decide qué mostrar: la espera, la entrada, o la vista pedida (el chat o el panel) con la sesión iniciada. */
+export function Aplicacion({ vista }: { vista: "chat" | "panel" }) {
   const [estado, setEstado] = useState<Estado>({ paso: "cargando" });
 
   useEffect(() => {
@@ -33,10 +34,14 @@ export function Aplicacion() {
   if (estado.paso === "cargando") {
     return (
       <main className="grid min-h-dvh place-items-center" aria-busy="true" aria-label="Cargando">
-        <Fia className="size-16 animate-pulse" />
+        <Fia className="size-14 animate-pulse" />
       </main>
     );
   }
   if (estado.paso === "sin_sesion") return <Ingreso />;
-  return <Chat key={estado.clave} repo={estado.repo} salir={estado.salir} />;
+  return vista === "panel" ? (
+    <Panel key={estado.clave} repo={estado.repo} rutaChat="/" salir={estado.salir} />
+  ) : (
+    <Chat key={estado.clave} repo={estado.repo} rutaPanel="/panel" salir={estado.salir} />
+  );
 }

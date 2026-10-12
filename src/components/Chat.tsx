@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ErrorDeDatos, type Repositorio } from "@/lib/datos/repositorio";
 import {
@@ -21,6 +22,7 @@ import { capitalizar } from "@/lib/motor/texto";
 import { leerImagen } from "@/lib/ocr";
 import { ES_ENTRADA, type Mensaje, type Transaccion } from "@/lib/tipos";
 import { Fia } from "./Fia";
+import { IconoEnviar, IconoImagen, IconoMas, IconoPanel } from "./iconos";
 import { TicketFrascos, TicketLista, TicketResumen } from "./Resumenes";
 import { Ticket, type AccionesDeTicket } from "./Ticket";
 
@@ -33,7 +35,9 @@ const ETIQUETA_DE_TIPO = {
   transferencia_recibida: "La recibí",
 } as const;
 
-export function Chat({ repo, salir }: { repo: Repositorio; salir?: () => void }) {
+type Props = { repo: Repositorio; rutaPanel: string; salir?: () => void };
+
+export function Chat({ repo, rutaPanel, salir }: Props) {
   const [sesion, setSesion] = useState<Sesion | null>(null);
   const [mensajes, setMensajes] = useState<Mensaje[]>([]);
   const [transacciones, setTransacciones] = useState<Record<string, Transaccion>>({});
@@ -46,7 +50,7 @@ export function Chat({ repo, salir }: { repo: Repositorio; salir?: () => void })
   const [menuAbierto, setMenuAbierto] = useState(false);
   /** Mensajes que ya estaban al abrir: esos no se animan. */
   const [iniciales, setIniciales] = useState<ReadonlySet<string>>(new Set());
-  /** Vista previa de las capturas enviadas en esta sesión. La imagen no se guarda en la base. */
+  /** Vista previa de las capturas enviadas en esta sesión. La imagen nunca se sube ni se guarda. */
   const [miniaturas, setMiniaturas] = useState<Record<string, string>>({});
 
   const raiz = useRef<HTMLDivElement>(null);
@@ -63,18 +67,23 @@ export function Chat({ repo, salir }: { repo: Repositorio; salir?: () => void })
     setSalioEsteMes(delMes.filter((t) => !ES_ENTRADA[t.tipo]).reduce((suma, t) => suma + t.centavos, 0));
   }, []);
 
+  /** Vuelca en pantalla lo leído de la base. Se usa al abrir y después de borrar un mes. */
+  const mostrar = useCallback(
+    async (abierta: Awaited<ReturnType<typeof abrir>>) => {
+      setSesion(abierta.sesion);
+      setMensajes(abierta.mensajes);
+      setIniciales(new Set(abierta.mensajes.map((m) => m.id)));
+      setTransacciones(Object.fromEntries(abierta.transacciones.map((t) => [t.id, t])));
+      await actualizarEncabezado(abierta.sesion);
+    },
+    [actualizarEncabezado],
+  );
+
   useEffect(() => {
     let vigente = true;
     const enlacesCreados = enlaces.current;
     abrir(repo)
-      .then(async (abierta) => {
-        if (!vigente) return;
-        setSesion(abierta.sesion);
-        setMensajes(abierta.mensajes);
-        setIniciales(new Set(abierta.mensajes.map((m) => m.id)));
-        setTransacciones(Object.fromEntries(abierta.transacciones.map((t) => [t.id, t])));
-        await actualizarEncabezado(abierta.sesion);
-      })
+      .then((abierta) => (vigente ? mostrar(abierta) : undefined))
       .catch((error) => {
         if (!vigente) return;
         const desactualizada = error instanceof ErrorDeDatos && error.baseDesactualizada;
@@ -84,7 +93,7 @@ export function Chat({ repo, salir }: { repo: Repositorio; salir?: () => void })
       vigente = false;
       enlacesCreados.forEach((enlace) => URL.revokeObjectURL(enlace));
     };
-  }, [repo, actualizarEncabezado]);
+  }, [repo, mostrar]);
 
   // En iPhone el teclado tapa la pantalla sin achicarla: se ajusta el alto a lo que queda visible.
   useEffect(() => {
@@ -112,12 +121,15 @@ export function Chat({ repo, salir }: { repo: Repositorio; salir?: () => void })
   });
 
   /** Corre una acción contra la base y vuelca al chat lo que haya cambiado. */
-  async function correr(s: Sesion, accion: (s: Sesion) => Promise<Novedad & { propio?: Mensaje }>, opciones: { reemplaza?: string } = {}) {
+  async function correr(s: Sesion, accion: (s: Sesion) => Promise<Novedad & { propio?: Mensaje }>, reemplaza?: string) {
     setOcupado(true);
     try {
       const novedad = await accion(s);
+      if (novedad.recargar) {
+        await mostrar(await abrir(repo));
+        return true;
+      }
       const { propio } = novedad;
-      const { reemplaza } = opciones;
       setMensajes((previos) => [...previos.map((m) => (m.id === reemplaza && propio ? propio : m)), ...novedad.mensajes]);
       if (propio && reemplaza) setMiniaturas((previas) => (previas[reemplaza] ? { ...previas, [propio.id]: previas[reemplaza] } : previas));
       setTransacciones((previas) => ({ ...previas, ...Object.fromEntries(novedad.transacciones.map((t) => [t.id, t])) }));
@@ -145,7 +157,7 @@ export function Chat({ repo, salir }: { repo: Repositorio; salir?: () => void })
     const propio = mensajeLocal("usuario", limpio);
     setMensajes((previos) => [...previos, propio]);
     setTexto("");
-    const salioBien = await correr(sesion, (s) => recibir(s, limpio, anterior), { reemplaza: propio.id });
+    const salioBien = await correr(sesion, (s) => recibir(s, limpio, anterior), propio.id);
     if (!salioBien) setTexto(limpio);
   }
 
@@ -171,7 +183,7 @@ export function Chat({ repo, salir }: { repo: Repositorio; salir?: () => void })
       } finally {
         setLeyendo(false);
       }
-      await correr(sesion, (s) => recibirCaptura(s, leido), { reemplaza: propio.id });
+      await correr(sesion, (s) => recibirCaptura(s, leido), propio.id);
     }
   }
 
@@ -195,85 +207,84 @@ export function Chat({ repo, salir }: { repo: Repositorio; salir?: () => void })
   const frascos = sesion?.frascos ?? [];
 
   return (
-    <div ref={raiz} className="fixed inset-x-0 top-0 mx-auto flex h-dvh w-full max-w-md flex-col md:border-x md:border-linea">
-      <header className="relative flex items-center gap-3 border-b border-linea px-4 pt-[max(env(safe-area-inset-top),0.75rem)] pb-2.5">
-        <Fia className="size-11 shrink-0" />
-        <div className="min-w-0 flex-1">
-          <h1 className="font-display text-[24px] leading-none font-extrabold tracking-tight">Fia</h1>
-          <p className="mt-1 truncate text-[13px] text-tinta-suave" aria-live="polite">
-            {estado}
-          </p>
-        </div>
-        {salir ? (
-          <button
-            type="button"
-            aria-label="Más opciones"
-            aria-expanded={menuAbierto}
-            onClick={() => setMenuAbierto((abierto) => !abierto)}
-            className="grid size-11 place-items-center rounded-full text-tinta-suave active:bg-tinta/5"
+    <div ref={raiz} className="fixed inset-x-0 top-0 h-dvh">
+      {/* La barra de arriba y la de abajo flotan: la conversación pasa por detrás del vidrio. */}
+      <header className="absolute inset-x-0 top-0 z-20 px-3 pt-[max(env(safe-area-inset-top),0.75rem)]">
+        <div className="cristal relative mx-auto flex max-w-3xl items-center gap-3 rounded-[26px] py-2 pr-2 pl-3">
+          <Fia className="size-10 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <h1 className="text-[17px] leading-tight font-semibold tracking-[-0.01em]">Fia</h1>
+            <p className="truncate text-[13px] leading-tight text-tinta-suave" aria-live="polite">
+              {estado}
+            </p>
+          </div>
+          <Link
+            href={rutaPanel}
+            className="flex h-10 items-center gap-1.5 rounded-full bg-black/5 px-3.5 text-[15px] font-medium text-acento transition-colors active:bg-black/10"
           >
-            <svg viewBox="0 0 24 24" className="size-6" fill="currentColor" aria-hidden="true">
-              <circle cx="5" cy="12" r="1.8" />
-              <circle cx="12" cy="12" r="1.8" />
-              <circle cx="19" cy="12" r="1.8" />
-            </svg>
-          </button>
-        ) : (
-          <span className="rounded-full border border-linea px-2.5 py-1 font-mono text-[11px] tracking-wider text-tinta-suave uppercase">
-            Demo
-          </span>
-        )}
-        {menuAbierto && salir && (
-          <>
-            <button type="button" aria-label="Cerrar menú" className="fixed inset-0 z-10 cursor-default" onClick={() => setMenuAbierto(false)} />
-            <div className="sombra-ticket absolute top-full right-3 z-20 -mt-1 rounded-xl bg-ticket p-1">
-              <button type="button" onClick={salir} className="h-11 rounded-lg px-4 text-[15px] font-medium text-tinta active:bg-tinta/5">
-                Cerrar sesión
-              </button>
-            </div>
-          </>
-        )}
+            <IconoPanel className="size-[18px]" />
+            Panel
+          </Link>
+          {salir && (
+            <button
+              type="button"
+              aria-label="Más opciones"
+              aria-expanded={menuAbierto}
+              onClick={() => setMenuAbierto((abierto) => !abierto)}
+              className="grid size-10 place-items-center rounded-full text-tinta-suave transition-colors active:bg-black/5"
+            >
+              <IconoMas className="size-5" />
+            </button>
+          )}
+          {menuAbierto && salir && (
+            <>
+              <button type="button" aria-label="Cerrar menú" className="fixed inset-0 z-10 cursor-default" onClick={() => setMenuAbierto(false)} />
+              <div className="cristal absolute top-full right-0 z-20 mt-2 rounded-2xl p-1.5">
+                <button type="button" onClick={salir} className="h-11 rounded-xl px-4 text-[16px] whitespace-nowrap text-rojo active:bg-black/5">
+                  Cerrar sesión
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto overscroll-contain px-3 py-4" aria-live="polite">
-        {noCargo && (
-          <p role="alert" className="mx-auto mt-10 max-w-xs text-center text-[15px] leading-snug text-tinta-suave">
-            {noCargo}
-          </p>
-        )}
-        <ol className="flex flex-col gap-2">
-          {mensajes.map((mensaje, indice) => {
-            const animar = !iniciales.has(mensaje.id);
-            const esUltimo = mensaje === ultimo;
-            const datos = mensaje.datos;
+      <main className="h-full overflow-y-auto overscroll-contain px-4" aria-live="polite">
+        <div className="mx-auto max-w-3xl pt-[calc(max(env(safe-area-inset-top),0.75rem)+4.75rem)] pb-[calc(max(env(safe-area-inset-bottom),0.75rem)+8.25rem)]">
+          {noCargo && (
+            <p role="alert" className="cristal mx-auto mt-8 max-w-sm rounded-[24px] p-5 text-center text-[15px] leading-snug text-tinta-suave">
+              {noCargo}
+            </p>
+          )}
+          <ol className="flex flex-col gap-2">
+            {mensajes.map((mensaje, indice) => {
+              const animar = !iniciales.has(mensaje.id);
+              const esUltimo = mensaje === ultimo;
+              const datos = mensaje.datos;
 
-            if (mensaje.autor === "usuario") {
+              if (mensaje.autor === "usuario") {
+                return (
+                  <li key={mensaje.id} className={`mt-1.5 flex justify-end ${animar ? "animate-entrar" : ""}`}>
+                    {datos.clase === "captura" ? (
+                      <Captura enlace={miniaturas[mensaje.id]} />
+                    ) : (
+                      <p className="max-w-[78%] rounded-[22px] bg-acento px-4 py-2.5 text-[17px] leading-[1.3] break-words text-white shadow-[0_6px_16px_-8px_rgb(10_102_232/0.6)]">
+                        {mensaje.texto}
+                      </p>
+                    )}
+                  </li>
+                );
+              }
+
+              const abreGrupo = mensajes[indice - 1]?.autor !== "fia";
+              const pendientes =
+                datos.clase === "lote"
+                  ? datos.transaccionIds.filter((id) => transacciones[id]?.estado === "en_revision" && !datos.avisos[id]?.includes("sentido"))
+                  : [];
               return (
-                <li key={mensaje.id} className={`mt-1 flex justify-end ${animar ? "animate-entrar" : ""}`}>
-                  {datos.clase === "captura" ? (
-                    <Captura enlace={miniaturas[mensaje.id]} />
-                  ) : (
-                    <p className="max-w-[80%] rounded-[18px] rounded-br-md bg-birome px-3.5 py-2.5 text-[16px] leading-snug break-words text-white">
-                      {mensaje.texto}
-                    </p>
-                  )}
-                </li>
-              );
-            }
-
-            const abreGrupo = mensajes[indice - 1]?.autor !== "fia";
-            const pendientes =
-              datos.clase === "lote"
-                ? datos.transaccionIds.filter((id) => transacciones[id]?.estado === "en_revision" && !datos.avisos[id]?.includes("sentido"))
-                : [];
-            return (
-              <li key={mensaje.id} className={`flex items-start gap-2 ${abreGrupo ? "mt-1" : ""}`}>
-                <div className="w-8 shrink-0 pt-0.5">{abreGrupo && <Fia className="size-8" />}</div>
-                <div className="flex min-w-0 flex-1 flex-col items-start gap-2">
+                <li key={mensaje.id} className={`flex flex-col items-start gap-2 ${abreGrupo ? "mt-1.5" : ""}`}>
                   {mensaje.texto && (
-                    <p
-                      className={`max-w-[88%] rounded-[18px] rounded-bl-md bg-ticket px-3.5 py-2.5 text-[16px] leading-snug shadow-[0_1px_0_var(--color-linea)] ${animar ? "animate-entrar" : ""}`}
-                    >
+                    <p className={`cristal-leve max-w-[82%] rounded-[22px] px-4 py-2.5 text-[17px] leading-[1.3] ${animar ? "animate-entrar" : ""}`}>
                       {mensaje.texto}
                     </p>
                   )}
@@ -312,7 +323,7 @@ export function Chat({ repo, salir }: { repo: Repositorio; salir?: () => void })
                       type="button"
                       disabled={ocupado}
                       onClick={() => ejecutar((s) => confirmarVarios(s, pendientes))}
-                      className="h-10 rounded-full border border-birome/35 bg-ticket px-4 text-[14px] font-semibold text-birome active:bg-birome/10 disabled:opacity-50"
+                      className="cristal-leve h-10 rounded-full px-4 text-[15px] font-semibold text-acento active:bg-white disabled:opacity-50"
                     >
                       Anotar los {pendientes.length}
                     </button>
@@ -340,96 +351,99 @@ export function Chat({ repo, salir }: { repo: Repositorio; salir?: () => void })
                     />
                   )}
                   {esUltimo && datos.clase === "ejemplos" && <Opciones deshabilitadas={ocupado} alElegir={enviar} opciones={EJEMPLOS} />}
-                </div>
-              </li>
-            );
-          })}
+                  {esUltimo && datos.clase === "confirmar_borrado" && (
+                    <Opciones
+                      deshabilitadas={ocupado}
+                      alElegir={enviar}
+                      peligrosa={0}
+                      opciones={[`Sí, borrar ${nombreDeMes(datos.desde)}`, "No, dejar todo"]}
+                    />
+                  )}
+                </li>
+              );
+            })}
 
-          {ocupado && (
-            <li className="flex items-start gap-2" aria-label={leyendo ? "Fia está leyendo la captura" : "Fia está anotando"}>
-              <div className="w-8 shrink-0" />
-              <p className="flex h-10 items-center gap-1 rounded-[18px] rounded-bl-md bg-ticket px-4 shadow-[0_1px_0_var(--color-linea)]">
-                {[0, 1, 2].map((i) => (
-                  <span key={i} className="animate-punto size-1.5 rounded-full bg-birome" style={{ animationDelay: `${i * 160}ms` }} />
-                ))}
-              </p>
-            </li>
-          )}
-        </ol>
-        <div ref={fin} className="h-px scroll-mb-4" />
+            {ocupado && (
+              <li aria-label={leyendo ? "Fia está leyendo la captura" : "Fia está anotando"}>
+                <p className="cristal-leve inline-flex h-11 items-center gap-1 rounded-[22px] px-4">
+                  {[0, 1, 2].map((i) => (
+                    <span key={i} className="animate-punto size-1.5 rounded-full bg-tinta-tenue" style={{ animationDelay: `${i * 160}ms` }} />
+                  ))}
+                </p>
+              </li>
+            )}
+          </ol>
+          <div ref={fin} className="h-px scroll-mb-40" />
+        </div>
       </main>
 
-      <footer className="border-t border-linea bg-papel px-3 pt-2 pb-[max(env(safe-area-inset-bottom),0.75rem)]">
-        <div className="-mx-3 mb-2 flex gap-2 overflow-x-auto px-3 [scrollbar-width:none]">
-          {ATAJOS.map((atajo) => (
-            <button
-              key={atajo}
-              type="button"
-              disabled={ocupado || !sesion}
-              onClick={() => enviar(atajo)}
-              className="h-9 shrink-0 rounded-full border border-linea px-3.5 text-[13px] font-medium text-tinta-suave active:bg-tinta/5 disabled:opacity-50"
-            >
-              {atajo}
-            </button>
-          ))}
-        </div>
-        <form
-          className="flex items-center gap-2"
-          onSubmit={(evento) => {
-            evento.preventDefault();
-            void enviar(texto);
-          }}
-        >
-          <input
-            ref={selector}
-            type="file"
-            accept="image/*"
-            multiple
-            className="hidden"
-            aria-hidden="true"
-            tabIndex={-1}
-            onChange={(evento) => {
-              const elegidos = Array.from(evento.target.files ?? []);
-              evento.target.value = "";
-              void adjuntar(elegidos);
+      <footer className="absolute inset-x-0 bottom-0 z-20 px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)]">
+        <div className="mx-auto max-w-3xl">
+          <div className="sin-barra -mx-3 mb-2 flex gap-2 overflow-x-auto px-3 py-1">
+            {ATAJOS.map((atajo) => (
+              <button
+                key={atajo}
+                type="button"
+                disabled={ocupado || !sesion}
+                onClick={() => enviar(atajo)}
+                className="cristal h-9 shrink-0 rounded-full px-3.5 text-[14px] font-medium text-tinta active:bg-white disabled:opacity-50"
+              >
+                {atajo}
+              </button>
+            ))}
+          </div>
+          <form
+            className="cristal flex items-center gap-1 rounded-full p-1.5"
+            onSubmit={(evento) => {
+              evento.preventDefault();
+              void enviar(texto);
             }}
-          />
-          <button
-            type="button"
-            aria-label="Mandar una captura"
-            disabled={ocupado || !sesion}
-            onClick={() => selector.current?.click()}
-            className="grid size-12 shrink-0 place-items-center rounded-full border border-linea bg-ticket text-birome transition-colors active:bg-birome/10 disabled:opacity-40"
           >
-            <svg viewBox="0 0 24 24" className="size-6" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <rect x="3.5" y="5" width="17" height="14" rx="3" />
-              <circle cx="9" cy="10" r="1.6" />
-              <path d="m5 17 4.2-4.2a1.5 1.5 0 0 1 2.1 0L15 16.5l1.7-1.7a1.5 1.5 0 0 1 2.1 0L20.5 16.5" />
-            </svg>
-          </button>
-          <label htmlFor="mensaje" className="sr-only">
-            Mensaje para Fia
-          </label>
-          <input
-            id="mensaje"
-            value={texto}
-            onChange={(evento) => setTexto(evento.target.value)}
-            placeholder="Contame un gasto…"
-            autoComplete="off"
-            enterKeyHint="send"
-            className="h-12 min-w-0 flex-1 rounded-full border border-linea bg-ticket px-4 text-[16px] outline-none placeholder:text-tinta-suave/70 focus:border-birome focus:ring-2 focus:ring-birome/20"
-          />
-          <button
-            type="submit"
-            aria-label="Enviar"
-            disabled={!texto.trim() || ocupado || !sesion}
-            className="grid size-12 shrink-0 place-items-center rounded-full bg-birome text-white transition-colors active:bg-birome-oscuro disabled:opacity-40"
-          >
-            <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" />
-            </svg>
-          </button>
-        </form>
+            <input
+              ref={selector}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              aria-hidden="true"
+              tabIndex={-1}
+              onChange={(evento) => {
+                const elegidos = Array.from(evento.target.files ?? []);
+                evento.target.value = "";
+                void adjuntar(elegidos);
+              }}
+            />
+            <button
+              type="button"
+              aria-label="Mandar una captura"
+              disabled={ocupado || !sesion}
+              onClick={() => selector.current?.click()}
+              className="grid size-10 shrink-0 place-items-center rounded-full text-acento transition-colors active:bg-black/5 disabled:opacity-40"
+            >
+              <IconoImagen className="size-6" />
+            </button>
+            <label htmlFor="mensaje" className="sr-only">
+              Mensaje para Fia
+            </label>
+            <input
+              id="mensaje"
+              value={texto}
+              onChange={(evento) => setTexto(evento.target.value)}
+              placeholder="Contame un gasto…"
+              autoComplete="off"
+              enterKeyHint="send"
+              className="h-10 min-w-0 flex-1 bg-transparent px-1 text-[17px] outline-none placeholder:text-tinta-tenue"
+            />
+            <button
+              type="submit"
+              aria-label="Enviar"
+              disabled={!texto.trim() || ocupado || !sesion}
+              className="grid size-10 shrink-0 place-items-center rounded-full bg-acento text-white transition-colors active:bg-acento-oscuro disabled:bg-black/10 disabled:text-white"
+            >
+              <IconoEnviar className="size-5" />
+            </button>
+          </form>
+        </div>
       </footer>
     </div>
   );
@@ -441,31 +455,41 @@ function Captura({ enlace }: { enlace: string | undefined }) {
     return (
       // La imagen vive solo en el celular (enlace temporal): no pasa por el optimizador de imágenes.
       // eslint-disable-next-line @next/next/no-img-element
-      <img src={enlace} alt="Captura enviada" className="max-h-56 max-w-[60%] rounded-2xl border border-linea object-cover" />
+      <img src={enlace} alt="Captura enviada" className="max-h-60 max-w-[60%] rounded-[22px] border border-white/70 object-cover shadow-[0_10px_24px_-12px_rgb(20_30_70/0.35)]" />
     );
   }
   return (
-    <p className="flex items-center gap-2 rounded-[18px] rounded-br-md bg-birome px-3.5 py-2.5 text-[16px] leading-snug text-white">
-      <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <rect x="3.5" y="5" width="17" height="14" rx="3" />
-        <circle cx="9" cy="10" r="1.6" />
-      </svg>
+    <p className="flex items-center gap-2 rounded-[22px] bg-acento px-4 py-2.5 text-[17px] leading-[1.3] text-white">
+      <IconoImagen className="size-5" />
       Captura
     </p>
   );
 }
 
-function Opciones({ opciones, alElegir, deshabilitadas }: { opciones: string[]; alElegir: (texto: string) => void; deshabilitadas: boolean }) {
+function Opciones({
+  opciones,
+  alElegir,
+  deshabilitadas,
+  peligrosa,
+}: {
+  opciones: string[];
+  alElegir: (texto: string) => void;
+  deshabilitadas: boolean;
+  /** Posición de la opción que borra o no tiene vuelta atrás, si hay una. */
+  peligrosa?: number;
+}) {
   if (!opciones.length) return null;
   return (
     <div className="animate-entrar flex flex-wrap gap-2">
-      {opciones.map((opcion) => (
+      {opciones.map((opcion, indice) => (
         <button
           key={opcion}
           type="button"
           disabled={deshabilitadas}
           onClick={() => alElegir(opcion)}
-          className="min-h-10 rounded-full border border-birome/35 bg-ticket px-4 py-2 text-left text-[14px] font-medium text-birome active:bg-birome/10 disabled:opacity-50"
+          className={`cristal-leve min-h-10 rounded-full px-4 py-2 text-left text-[15px] font-medium active:bg-white disabled:opacity-50 ${
+            indice === peligrosa ? "text-rojo" : "text-acento"
+          }`}
         >
           {opcion}
         </button>

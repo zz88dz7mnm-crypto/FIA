@@ -200,6 +200,55 @@ create trigger transacciones_auditar
   after insert or update on public.transacciones
   for each row execute function public.fia_auditar_transaccion();
 
+-- ───────────────────── Borrar un mes ─────────────────────
+-- Lo usa el comando /borrar-todo del chat. Borra de verdad, no anula: movimientos con fecha
+-- en el rango, y el chat, los frascos y los aportes creados en ese mes. Solo los del usuario.
+create or replace function public.fia_borrar_mes(desde date, hasta date)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  yo uuid := auth.uid();
+  zona text;
+  movimientos integer;
+begin
+  if yo is null then
+    raise exception 'Hace falta iniciar sesión';
+  end if;
+  if hasta < desde or hasta - desde > 31 then
+    raise exception 'El rango tiene que ser de un mes como máximo';
+  end if;
+
+  select p.zona_horaria into zona from public.perfiles p where p.id = yo;
+  zona := coalesce(zona, 'America/Argentina/Buenos_Aires');
+
+  delete from public.auditoria a
+    using public.transacciones t
+    where a.entidad = 'transaccion' and a.entidad_id = t.id
+      and t.usuario_id = yo and t.fecha between desde and hasta;
+
+  delete from public.transacciones t where t.usuario_id = yo and t.fecha between desde and hasta;
+  get diagnostics movimientos = row_count;
+
+  delete from public.aportes_frasco a
+    where a.usuario_id = yo and (a.creado_en at time zone zona)::date between desde and hasta;
+  delete from public.frascos f
+    where f.usuario_id = yo and (f.creado_en at time zone zona)::date between desde and hasta;
+  delete from public.mensajes m
+    where m.usuario_id = yo and (m.creado_en at time zone zona)::date between desde and hasta;
+
+  insert into public.auditoria (usuario_id, entidad, entidad_id, accion, cambios)
+  values (yo, 'mes', yo, 'borrado', jsonb_build_object('desde', desde, 'hasta', hasta, 'movimientos', movimientos));
+
+  return jsonb_build_object('movimientos', movimientos);
+end;
+$$;
+
+revoke all on function public.fia_borrar_mes(date, date) from public, anon;
+grant execute on function public.fia_borrar_mes(date, date) to authenticated;
+
 -- ─────────────── Seguridad: cada uno ve lo suyo ───────────────
 alter table public.perfiles enable row level security;
 alter table public.categorias enable row level security;
@@ -311,4 +360,15 @@ insert into public.categorias (usuario_id, nombre, clase, palabras_clave) values
   (null, 'Ingresos', 'ingreso', array[
     'sueldo', 'salario', 'trabajo', 'aguinaldo', 'honorarios', 'freelance', 'devolucion',
     'reintegro', 'venta', 'cobro', 'bono', 'comision'])
+on conflict do nothing;
+
+-- Categorías por tipo de operación: las usa Fia al leer capturas del banco o la billetera.
+insert into public.categorias (usuario_id, nombre, clase, palabras_clave) values
+  (null, 'Transferencias', 'gasto', '{}'),
+  (null, 'Pagos con tarjeta', 'gasto', '{}'),
+  (null, 'Pagos con QR', 'gasto', '{}'),
+  (null, 'Impuestos', 'gasto', array[
+    'impuesto', 'monotributo', 'afip', 'arca', 'iibb', 'ingresos brutos', 'percepcion', 'sellos']),
+  (null, 'Rendimientos diarios', 'ingreso', '{}'),
+  (null, 'Entre mis cuentas', 'gasto', '{}')
 on conflict do nothing;

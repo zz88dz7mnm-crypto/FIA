@@ -96,3 +96,13 @@ export function decimalACentavos(valor: number | string): number {
   const centavos = Number(entero) * 100 + Number(decimales.padEnd(2, "0").slice(0, 2));
   return String(valor).trim().startsWith("-") ? -centavos : centavos;
 }
+
+/** Versión corta para ejes y espacios chicos: "$950" · "$20 mil" · "$1,5 M". */
+export function formatearCompacto(centavos: number): string {
+  const pesos = Math.abs(centavos) / 100;
+  const signo = centavos < 0 ? "-" : "";
+  const corto = (valor: number) => String(Math.round(valor * 10) / 10).replace(".", ",");
+  if (pesos >= 1_000_000) return `${signo}$${corto(pesos / 1_000_000)} M`;
+  if (pesos >= 1_000) return `${signo}$${corto(pesos / 1_000)} mil`;
+  return `${signo}$${Math.round(pesos)}`;
+}

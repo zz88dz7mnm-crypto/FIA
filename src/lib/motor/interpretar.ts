@@ -38,6 +38,8 @@ export type Intencion =
   /** Poner o sacar plata de un frasco (lo crea si no existe). `centavos` negativo = sacar; null = sin importe. */
   | { clase: "frasco_asignar"; nombre: string; frascoId: string | null; centavos: number | null }
   | { clase: "frasco_borrar"; nombre: string; frascoId: string | null }
+  /** "/borrar-todo": borrar todo lo del mes en curso. Siempre pide confirmación. */
+  | { clase: "borrar_mes" }
   | { clase: "ultimos" }
   | { clase: "deshacer" }
   | { clase: "ayuda" }
@@ -167,10 +169,10 @@ function interpretarFrasco(texto: string, limpio: string, importes: ReturnType<t
   };
 }
 
-/** La única categoría de ingresos, si hay exactamente una. */
+/** La categoría general de ingresos: la que se llama "Ingresos" o, si no, la única de esa clase. */
 export function categoriaDeIngresos(categorias: Categoria[]): Categoria | null {
   const ingresos = categorias.filter((c) => c.clase === "ingreso");
-  return ingresos.length === 1 ? ingresos[0] : null;
+  return ingresos.find((c) => palabras(c.nombre) === "ingresos") ?? (ingresos.length === 1 ? ingresos[0] : null);
 }
 
 function armarMovimiento(
@@ -240,6 +242,9 @@ function interpretarFormal(campos: string[], ctx: Contexto): Intencion | null {
 export function interpretar(mensaje: string, ctx: Contexto): Intencion {
   const original = mensaje.normalize("NFC").trim();
   if (!original) return { clase: "desconocido" };
+
+  // Borrar es grave: solo se acepta el comando exacto, nunca una frase parecida.
+  if (/^\/borrar[- ]todo$/i.test(original)) return { clase: "borrar_mes" };
 
   if (original.includes(";")) {
     const formal = interpretarFormal(original.split(";"), ctx);

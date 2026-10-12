@@ -1,7 +1,7 @@
 import type { Repositorio, CambiosTransaccion } from "../datos/repositorio";
 import { extraerOperaciones } from "../motor/capturas";
 import { clasificar, type Categoria, type ReglaPersonal } from "../motor/categorias";
-import { rangoDe, type Periodo } from "../motor/fechas";
+import { nombreDeMes, rangoDe, type Periodo } from "../motor/fechas";
 import { buscarFrasco, categoriaDeIngresos, completar, interpretar, type Borrador, type Contexto, type Intencion, type Tipo } from "../motor/interpretar";
 import { capitalizar, palabras } from "../motor/texto";
 import { ES_ENTRADA, type Aviso, type DatosMensaje, type EstadoFrasco, type Mensaje, type Perfil, type Resumen, type Transaccion } from "../tipos";
@@ -17,8 +17,11 @@ export type Sesion = {
   hoy: () => string;
 };
 
-/** Lo que cambió después de una acción: mensajes nuevos de Fia y movimientos tocados. */
-export type Novedad = { mensajes: Mensaje[]; transacciones: Transaccion[] };
+/**
+ * Lo que cambió después de una acción: mensajes nuevos de Fia y movimientos tocados.
+ * `recargar` avisa que se borraron cosas y hay que volver a leer el chat entero.
+ */
+export type Novedad = { mensajes: Mensaje[]; transacciones: Transaccion[]; recargar?: boolean };
 
 type MovimientoLeido = Extract<Intencion, { clase: "movimiento" }>;
 
@@ -78,6 +81,13 @@ function leerNombre(texto: string, sesion: Sesion): string | null {
   return interpretar(texto, contexto(sesion)).clase === "desconocido" ? capitalizar(limpio) : null;
 }
 
+/** Una categoría buscada por su nombre exacto (sin distinguir mayúsculas ni acentos). */
+function categoriaLlamada(sesion: Sesion, nombre: string | null): Categoria | null {
+  return (nombre && sesion.categorias.find((c) => palabras(c.nombre) === palabras(nombre))) || null;
+}
+
+const esTransferencia = (tipo: Tipo) => tipo === "transferencia_enviada" || tipo === "transferencia_recibida";
+
 function nombreDeCategoria(sesion: Sesion, id: string | null): string | null {
   return sesion.categorias.find((c) => c.id === id)?.nombre ?? null;
 }
@@ -112,7 +122,9 @@ async function proponer(sesion: Sesion, borrador: Borrador & { tipo: Tipo; centa
     centavos: borrador.centavos,
     fecha: borrador.fecha,
     descripcion: borrador.descripcion,
-    categoriaId: borrador.categoriaId,
+    // Una transferencia sin otra categoría va a "Transferencias", y su detalle es con quién fue.
+    categoriaId: borrador.categoriaId ?? (esTransferencia(borrador.tipo) ? (categoriaLlamada(sesion, "Transferencias")?.id ?? null) : null),
+    contraparte: esTransferencia(borrador.tipo) && borrador.descripcion ? borrador.descripcion : null,
     frascoId: borrador.frascoId,
     origenMensajeId,
   });
@@ -163,6 +175,17 @@ async function responder(sesion: Sesion, texto: string, anterior: Mensaje | null
     mensajes: [await decir(sesion, t, datos)],
     transacciones: [],
   });
+
+  if (anterior?.datos.clase === "confirmar_borrado") {
+    const respuesta = palabras(texto);
+    if (/^si\b/.test(respuesta)) {
+      const { desde, hasta } = anterior.datos;
+      const { movimientos } = await sesion.repo.borrarMes(desde, hasta);
+      await refrescarFrascos(sesion);
+      return { ...(await soloTexto(voz.mesBorrado(nombreDeMes(desde), movimientos))), recargar: true };
+    }
+    if (/^no\b/.test(respuesta)) return soloTexto(voz.borradoCancelado);
+  }
 
   if (anterior?.datos.clase === "pide_nombre") {
     const nombre = leerNombre(texto, sesion);
@@ -235,6 +258,12 @@ async function responder(sesion: Sesion, texto: string, anterior: Mensaje | null
             ? voz.frascoSumado(leido.nombre, centavos)
             : voz.frascoRestado(leido.nombre, -centavos);
       return soloTexto(texto, { clase: "frascos", frascos: sesion.frascos.filter((f) => f.id === id) });
+    }
+
+    case "borrar_mes": {
+      const { desde, hasta } = rangoDe("mes", sesion.hoy());
+      const cantidad = (await sesion.repo.movimientosEntre(desde, hasta)).length;
+      return soloTexto(voz.borrarMesPregunta(nombreDeMes(desde), cantidad), { clase: "confirmar_borrado", desde, hasta });
     }
 
     case "frasco_borrar": {
@@ -320,7 +349,9 @@ export async function recibirCaptura(sesion: Sesion, textoLeido: string): Promis
     // Sin sentido claro se guarda como enviada, pero el ticket obliga a elegir antes de anotar.
     const tipo = operacion.tipo ?? "transferencia_enviada";
     const fecha = operacion.fecha ?? hoy;
+    // Primero el tipo de operación que dice la captura; si no dice nada, las palabras del detalle.
     const categoria =
+      categoriaLlamada(sesion, operacion.rubro) ??
       clasificar(operacion.descripcion, sesion.categorias, sesion.reglas) ??
       (tipo === "ingreso" ? categoriaDeIngresos(sesion.categorias) : null);
     const detalle = palabras(operacion.descripcion);
@@ -334,7 +365,8 @@ export async function recibirCaptura(sesion: Sesion, textoLeido: string): Promis
       fecha,
       descripcion: operacion.descripcion,
       categoriaId: categoria?.id ?? null,
-      frascoId: ES_ENTRADA[tipo] ? null : (buscarFrasco(operacion.descripcion, sesion.frascos)?.id ?? null),
+      frascoId: ES_ENTRADA[tipo] || operacion.interna ? null : (buscarFrasco(operacion.descripcion, sesion.frascos)?.id ?? null),
+      interna: operacion.interna,
       origenMensajeId: propio.id,
       metodo: "imagen",
       contraparte: operacion.contraparte,
@@ -345,6 +377,7 @@ export async function recibirCaptura(sesion: Sesion, textoLeido: string): Promis
       ...(operacion.tipo ? [] : (["sentido"] as const)),
       ...(operacion.importeDudoso ? (["importe_dudoso"] as const) : []),
       ...(operacion.fecha ? [] : (["sin_fecha"] as const)),
+      ...(operacion.interna ? (["propia"] as const) : []),
       ...(repetidas.length ? (["duplicado"] as const) : []),
     ];
   }

@@ -11,14 +11,18 @@ type FilaTransaccion = {
   descripcion: string;
   categoria_id: string | null;
   frasco_id: string | null;
+  contraparte: string | null;
+  es_interna: boolean;
   referencia: string | null;
+  metodo: Transaccion["metodo"];
   estado: Transaccion["estado"];
   creado_en: string;
 };
 
 type FilaMensaje = { id: string; autor: Mensaje["autor"]; texto: string; datos: DatosMensaje | Record<string, never>; creado_en: string };
 
-const COLUMNAS_TRANSACCION = "id, tipo, importe, fecha, descripcion, categoria_id, frasco_id, referencia, estado, creado_en";
+const COLUMNAS_TRANSACCION = "id, tipo, importe, fecha, descripcion, categoria_id, frasco_id, contraparte, es_interna, referencia, metodo, estado, creado_en";
+const FILAS_POR_PAGINA = 1000;
 const COLUMNAS_MENSAJE = "id, autor, texto, datos, creado_en";
 
 const aTransaccion = (f: FilaTransaccion): Transaccion => ({
@@ -29,7 +33,10 @@ const aTransaccion = (f: FilaTransaccion): Transaccion => ({
   descripcion: f.descripcion,
   categoriaId: f.categoria_id,
   frascoId: f.frasco_id,
+  contraparte: f.contraparte,
+  interna: f.es_interna,
   referencia: f.referencia,
+  metodo: f.metodo,
   estado: f.estado,
   creadoEn: f.creado_en,
 });
@@ -103,6 +110,7 @@ export function repositorioSupabase(db: SupabaseClient, usuarioId: string): Repo
             origen_mensaje_id: nueva.origenMensajeId,
             frasco_id: nueva.frascoId ?? null,
             contraparte: nueva.contraparte ?? null,
+            es_interna: nueva.interna ?? false,
             referencia: nueva.referencia ?? null,
             estado: "en_revision",
             metodo: nueva.metodo ?? "texto",
@@ -154,6 +162,29 @@ export function repositorioSupabase(db: SupabaseClient, usuarioId: string): Repo
       );
       return filas.map(aTransaccion);
     },
+    async movimientosEntre(desde, hasta) {
+      // La API entrega de a mil filas: se piden páginas hasta agotar el rango.
+      const todas: FilaTransaccion[] = [];
+      for (let pagina = 0; ; pagina++) {
+        const filas = exigir<FilaTransaccion[]>(
+          await db
+            .from("transacciones")
+            .select(COLUMNAS_TRANSACCION)
+            .gte("fecha", desde)
+            .lte("fecha", hasta)
+            .order("fecha", { ascending: false })
+            .order("creado_en", { ascending: false })
+            .range(pagina * FILAS_POR_PAGINA, (pagina + 1) * FILAS_POR_PAGINA - 1),
+        );
+        todas.push(...filas);
+        if (filas.length < FILAS_POR_PAGINA) break;
+      }
+      return todas.map(aTransaccion);
+    },
+    async borrarMes(desde, hasta) {
+      const resultado = exigir<{ movimientos: number }>(await db.rpc("fia_borrar_mes", { desde, hasta }));
+      return { movimientos: resultado.movimientos };
+    },
     async frascos() {
       const [frascos, aportes, gastos] = await Promise.all([
         db.from("frascos").select("id, nombre").order("creado_en"),
@@ -191,6 +222,7 @@ function aColumnas(cambios: CambiosTransaccion): Record<string, unknown> {
   if (cambios.descripcion !== undefined) columnas.descripcion = cambios.descripcion;
   if (cambios.categoriaId !== undefined) columnas.categoria_id = cambios.categoriaId;
   if (cambios.frascoId !== undefined) columnas.frasco_id = cambios.frascoId;
+  if (cambios.interna !== undefined) columnas.es_interna = cambios.interna;
   if (cambios.estado !== undefined) columnas.estado = cambios.estado;
   return columnas;
 }

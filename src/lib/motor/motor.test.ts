@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { clasificar } from "./categorias";
 import { buscarFecha, describirFecha, rangoDe } from "./fechas";
-import { buscarImportes, centavosADecimal, decimalACentavos, formatearImporte } from "./importes";
+import { buscarImportes, centavosADecimal, decimalACentavos, formatearCompacto, formatearImporte } from "./importes";
 import { completar, interpretar, type Borrador, type Intencion } from "./interpretar";
 import { CATEGORIAS_DE_MUESTRA } from "./muestras";
 import { plano } from "./texto";
@@ -58,6 +58,10 @@ describe("importes", () => {
     expect(decimalACentavos(4500.5)).toBe(450050);
     expect(decimalACentavos("0.07")).toBe(7);
     expect(decimalACentavos(999999999999.99)).toBe(99999999999999);
+  });
+
+  it("abrevia para los ejes", () => {
+    expect([95000, 2000000, 150000, 120000000, 0].map(formatearCompacto)).toEqual(["$950", "$20 mil", "$1,5 mil", "$1,2 M", "$0"]);
   });
 });
 

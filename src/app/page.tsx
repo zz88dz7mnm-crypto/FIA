@@ -1,5 +1,5 @@
 import { Aplicacion } from "@/components/Aplicacion";
 
 export default function Inicio() {
-  return <Aplicacion />;
+  return <Aplicacion vista="chat" />;
 }

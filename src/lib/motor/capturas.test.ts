@@ -61,6 +61,8 @@ describe("comprobantes", () => {
         contraparte: "Maria Lopez",
         referencia: "123456789012",
         importeDudoso: false,
+        rubro: "Transferencias",
+        interna: false,
       },
     ]);
   });
@@ -84,6 +86,8 @@ describe("comprobantes", () => {
         contraparte: "Carlos Perez",
         referencia: "00012345",
         importeDudoso: false,
+        rubro: "Transferencias",
+        interna: false,
       },
     ]);
   });
@@ -95,10 +99,10 @@ describe("comprobantes", () => {
 
 describe("listados", () => {
   it("separa una operación por renglón, con su fecha y su sentido", () => {
-    expect(leer(LISTADO)).toEqual([
-      { tipo: "transferencia_enviada", centavos: 800000, fecha: "2026-10-11", descripcion: "Kiosco El Sol", contraparte: "Kiosco El Sol", referencia: null, importeDudoso: false },
-      { tipo: "transferencia_recibida", centavos: 1250000, fecha: "2026-10-11", descripcion: "Pedro Gomez", contraparte: "Pedro Gomez", referencia: null, importeDudoso: false },
-      { tipo: "gasto", centavos: 320000, fecha: "2026-10-10", descripcion: "Panadería La Espiga", contraparte: null, referencia: null, importeDudoso: false },
+    expect(leer(LISTADO)).toMatchObject([
+      { tipo: "transferencia_enviada", centavos: 800000, fecha: "2026-10-11", descripcion: "Kiosco El Sol", contraparte: "Kiosco El Sol", rubro: "Transferencias" },
+      { tipo: "transferencia_recibida", centavos: 1250000, fecha: "2026-10-11", descripcion: "Pedro Gomez", contraparte: "Pedro Gomez", rubro: "Transferencias" },
+      { tipo: "gasto", centavos: 320000, fecha: "2026-10-10", descripcion: "Panadería La Espiga", contraparte: "Panadería La Espiga", rubro: "Pagos con QR" },
     ]);
   });
 
@@ -132,5 +136,82 @@ describe("importes de captura", () => {
 
   it("sin el signo $ no hay operación", () => {
     expect(leer("CBU 0170099220000067797370\n14:32\n123456")).toEqual([]);
+  });
+});
+
+// Texto real que devolvió el lector para una captura de billetera con siete operaciones.
+const BILLETERA = `11:10
+
+02 de octubre
+
+— Transferencia enviada - $ 1.200,00
+Valentin Torres Gaitan
+02 de octubre
+
+— Pagocon tarjeta de débito - $ 10.860,00
+Cp*pack Claro
+02 de octubre
+
+— — Acreditación de frasco + $ 40.000,00
+Fondo
+02 de octubre
+
+— Rendimiento diario + $ 1,69
+01 de octubre
+
+— — Transferencia enviada - $ 60.000,00
+Ameijeiras Juan Pedro
+01 de octubre
+
+— Dinero agregado a Frasco - $ 40.000,00
+Fondo
+01 de octubre
+
+— Dinero agregado a Frasco - $ 30.000,00
+Finde 3-4
+`;
+
+describe("captura real de billetera", () => {
+  const operaciones = leer(BILLETERA, "Juan Pedro");
+
+  it("separa las siete operaciones con su importe y su fecha", () => {
+    expect(operaciones.map((o) => [o.centavos, o.fecha])).toEqual([
+      [120000, "2026-10-02"],
+      [1086000, "2026-10-02"],
+      [4000000, "2026-10-02"],
+      [169, "2026-10-02"],
+      [6000000, "2026-10-01"],
+      [4000000, "2026-10-01"],
+      [3000000, "2026-10-01"],
+    ]);
+    expect(operaciones.every((o) => !o.importeDudoso)).toBe(true);
+  });
+
+  it("clasifica por tipo de operación y guarda con quién fue", () => {
+    expect(operaciones.map((o) => [o.rubro, o.tipo, o.descripcion])).toEqual([
+      ["Transferencias", "transferencia_enviada", "Valentin Torres Gaitan"],
+      ["Pagos con tarjeta", "gasto", "Cp*pack Claro"],
+      ["Entre mis cuentas", "transferencia_recibida", "Fondo"],
+      ["Rendimientos diarios", "ingreso", "Rendimiento diario"],
+      ["Entre mis cuentas", "transferencia_enviada", "Ameijeiras Juan Pedro"],
+      ["Entre mis cuentas", "transferencia_enviada", "Fondo"],
+      ["Entre mis cuentas", "transferencia_enviada", "Finde 3-4"],
+    ]);
+    expect(operaciones[0].contraparte).toBe("Valentin Torres Gaitan");
+    expect(operaciones[3].contraparte).toBeNull();
+  });
+
+  it("los movimientos entre frascos y a tu propio nombre son internos", () => {
+    expect(operaciones.map((o) => o.interna)).toEqual([false, false, true, false, true, true, true]);
+  });
+
+  it("con un nombre suelto no asume que una transferencia es a vos", () => {
+    const conNombreCorto = leer(BILLETERA, "Juan");
+    expect(conNombreCorto[4]).toMatchObject({ interna: false, rubro: "Transferencias", tipo: "transferencia_enviada" });
+  });
+
+  it("en un listado, un renglón de impuestos es una operación", () => {
+    const [impuesto] = leer("05 de octubre\nImpuesto sobre los ingresos brutos - $ 310,45\n05 de octubre\nPago con QR - $ 2.000,00\nKiosco");
+    expect(impuesto).toMatchObject({ rubro: "Impuestos", tipo: "gasto", centavos: 31045 });
   });
 });

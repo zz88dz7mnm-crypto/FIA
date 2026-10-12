@@ -14,6 +14,7 @@ export type NuevaTransaccion = {
   metodo?: "texto" | "imagen";
   contraparte?: string | null;
   referencia?: string | null;
+  interna?: boolean;
 };
 
 export type CambiosTransaccion = Partial<{
@@ -23,6 +24,7 @@ export type CambiosTransaccion = Partial<{
   descripcion: string;
   categoriaId: string | null;
   frascoId: string | null;
+  interna: boolean;
   estado: Estado;
 }>;
 
@@ -45,10 +47,17 @@ export interface Repositorio {
   actualizarTransaccion(id: string, cambios: CambiosTransaccion): Promise<Transaccion>;
   /** Movimientos vigentes con el mismo tipo, importe y fecha: posibles duplicados. */
   parecidas(a: { tipo: Tipo; centavos: number; fecha: string }): Promise<Transaccion[]>;
-  /** Confirmadas con fecha dentro del rango (inclusive). */
+  /** Confirmadas con fecha dentro del rango (inclusive). No trae los movimientos entre cuentas propias. */
   confirmadasEntre(desde: string, hasta: string): Promise<Transaccion[]>;
   /** Las últimas confirmadas, de la más nueva a la más vieja. */
   ultimas(limite: number): Promise<Transaccion[]>;
+  /** Todos los movimientos del rango, en cualquier estado, del más nuevo al más viejo. Para el panel. */
+  movimientosEntre(desde: string, hasta: string): Promise<Transaccion[]>;
+  /**
+   * Borra de verdad todo lo de un mes: movimientos con esa fecha, y el chat, los
+   * frascos y los aportes creados en ese mes. No se puede deshacer.
+   */
+  borrarMes(desde: string, hasta: string): Promise<{ movimientos: number }>;
 
   /** Los frascos con lo asignado y lo gastado (solo cuentan los gastos confirmados). */
   frascos(): Promise<EstadoFrasco[]>;
@@ -67,6 +76,6 @@ export class ErrorDeDatos extends Error {
 
   /** La base no tiene una tabla o columna que la app necesita: falta correr el SQL nuevo. */
   get baseDesactualizada(): boolean {
-    return ["42703", "42P01", "PGRST204", "PGRST205"].includes(this.codigo ?? "");
+    return ["42703", "42P01", "42883", "PGRST202", "PGRST204", "PGRST205"].includes(this.codigo ?? "");
   }
 }

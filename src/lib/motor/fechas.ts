@@ -120,6 +120,13 @@ export function rangoDe(periodo: Periodo, hoy: string): { desde: string; hasta: 
   }
 }
 
+/** El período inmediatamente anterior, para comparar: la semana, el mes o el año previos. */
+export function rangoPrevio(periodo: Periodo, hoy: string): { desde: string; hasta: string } {
+  const vispera = sumarDias(rangoDe(periodo, hoy).desde, -1);
+  if (periodo === "hoy") return { desde: vispera, hasta: vispera };
+  return rangoDe(periodo === "mes_pasado" ? "mes" : periodo, vispera);
+}
+
 /** "hoy" · "ayer" · "5 de octubre" · "5 de octubre de 2025" */
 export function describirFecha(iso: string, hoy: string): string {
   if (iso === hoy) return "hoy";

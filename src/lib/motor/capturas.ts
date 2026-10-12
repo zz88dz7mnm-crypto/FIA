@@ -13,6 +13,10 @@ export type OperacionLeida = {
   contraparte: string | null;
   referencia: string | null;
   importeDudoso: boolean;
+  /** Categoría sugerida según el tipo de operación ("Transferencias", "Pagos con tarjeta"…), o null. */
+  rubro: string | null;
+  /** Movimiento entre cuentas o frascos propios: se anota, pero no cuenta como gasto ni como ingreso. */
+  interna: boolean;
 };
 
 type Importe = { centavos: number; signo: "+" | "-" | null; dudoso: boolean; resto: string };
@@ -22,7 +26,9 @@ type Importe = { centavos: number; signo: "+" | "-" | null; dudoso: boolean; res
 const IMPORTE =
   /([+\-−–—])?\s*\$\s*([+\-−–—])?\s*(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{1,2})(?!\d)|(\d{2})(?!\d)|\s(\d{2})(?![\d:/.,]))?/g;
 
-const SALDO = /\b(saldo|disponible|tu dinero|dinero en cuenta|comision|impuestos?|iva)\b/;
+const SALDO = /\b(saldo|disponible|tu dinero|dinero en cuenta)\b/;
+// Renglones de detalle dentro de un comprobante. En un listado, en cambio, son operaciones.
+const CARGOS = /\b(comision|impuestos?|iva)\b/;
 
 const RECIBIDA = /\b(transferencia recibida|recibiste|te transfirio|te transfirieron|te envio|dinero recibido|te pago)\b/;
 const ENVIADA = /\b(transferencia enviada|transferencia realizada|transferencia exitosa|le transferiste|transferiste|le enviaste|enviaste|dinero enviado)\b/;
@@ -35,6 +41,28 @@ const TITULO_GENERICO =
   /^(transferencia( enviada| recibida| realizada| exitosa)?|pago( con qr| realizado| exitoso)?|compra|ingreso de dinero|dinero (recibido|enviado)|enviaste|recibiste|pagaste)$/;
 
 const COMPROBANTE = /\b(comprobante|operacion|coelsa|cvu|cbu|destinatario|beneficiario)\b/;
+
+// El tipo de operación define la categoría. Se prueban en este orden: gana la primera que coincide.
+const RUBROS: [RegExp, string][] = [
+  [/\bfrascos?\b|\bentre (mis |tus )?cuentas\b|\breservas?\b/, "Entre mis cuentas"],
+  [/\brendimientos?\b|\bintereses\b/, "Rendimientos diarios"],
+  [/\bimpuestos?\b|\bpercepcion(es)?\b|\bretencion(es)?\b|\bingresos brutos\b|\biibb\b|\bsellos\b|\bafip\b|\barca\b/, "Impuestos"],
+  [/\bqr\b/, "Pagos con QR"],
+  [/\btarjetas?\b|\bdebito\b|\bcredito\b/, "Pagos con tarjeta"],
+  [/\btransferencias?\b|\btransferiste\b|\bte transfirio\b/, "Transferencias"],
+];
+const RUBRO_INTERNO = "Entre mis cuentas";
+
+function rubroDe(textoPlano: string): string | null {
+  const limpio = textoPlano.replace(RUIDO, " ");
+  return RUBROS.find(([patron]) => patron.test(limpio))?.[1] ?? null;
+}
+
+/** ¿Este renglón dice qué tipo de operación es ("Transferencia enviada", "Pago con tarjeta de débito")? */
+function esTipoDeOperacion(texto: string): boolean {
+  const p = plano(texto).replace(RUIDO, " ");
+  return TITULO_GENERICO.test(palabras(texto)) || rubroDe(p) !== null || RECIBIDA.test(p) || ENVIADA.test(p) || INGRESO.test(p) || GASTO.test(p);
+}
 
 function importesDe(linea: string): Importe[] {
   const hallados: Importe[] = [];
@@ -59,9 +87,9 @@ function importesDe(linea: string): Importe[] {
 function textoUtil(linea: string): string {
   const limpio = linea
     .replace(/\b\d{1,2}:\d{2}(\s?hs)?\b/gi, " ")
-    .replace(/[•·|>›<*]+/g, " ")
+    .replace(/[•·|>›<]+/g, " ")
     .replace(/\s+/g, " ")
-    .replace(/^[\s\-–—.,:]+|[\s\-–—.,:]+$/g, "");
+    .replace(/^[^\p{L}\p{N}]+|[\s\-–—.,:]+$/gu, "");
   return /\p{L}{3,}/u.test(limpio) ? limpio : "";
 }
 
@@ -116,6 +144,18 @@ function referenciaDe(lineas: string[], planas: string[]): string | null {
   return null;
 }
 
+/** ¿El texto nombra al usuario? Solo vale con nombre y apellido: un nombre suelto coincide con cualquiera. */
+function nombraA(valor: string | null, nombre: string | null, minimo = 1): boolean {
+  const propio = nombre ? palabras(nombre).split(" ").filter(Boolean) : [];
+  return propio.length >= minimo && valor !== null && propio.every((palabra) => ` ${palabras(valor)} `.includes(` ${palabra} `));
+}
+
+/** Un movimiento interno conserva su dirección, pero como transferencia: no es un gasto ni un ingreso. */
+function tipoInterno(signo: Importe["signo"], tipo: Tipo | null): Tipo | null {
+  if (signo) return signo === "+" ? "transferencia_recibida" : "transferencia_enviada";
+  return tipo === "ingreso" ? "transferencia_recibida" : tipo === "gasto" ? "transferencia_enviada" : tipo;
+}
+
 /** Un comprobante: una sola operación, con sus campos repartidos por toda la imagen. */
 function leerComprobante(lineas: string[], planas: string[], importes: Importe[], ctx: Contexto): OperacionLeida {
   const todo = planas.join("\n");
@@ -126,27 +166,30 @@ function leerComprobante(lineas: string[], planas: string[], importes: Importe[]
   const concepto = campo(lineas, planas, "concepto|motivo|descripcion|mensaje");
 
   // El sentido sale de lo que dice la imagen; si no, de comparar tu nombre con "De" y "Para".
-  const propio = ctx.nombre ? palabras(ctx.nombre).split(" ") : [];
-  const esPropio = (valor: string | null) =>
-    propio.length > 0 && valor !== null && propio.every((palabra) => ` ${palabras(valor)} `.includes(` ${palabra} `));
-
-  const tipo: Tipo | null =
+  const sentido: Tipo | null =
     sentidoDe(todo, importe.signo) ??
-    (esPropio(para) ? "transferencia_recibida" : null) ??
-    (esPropio(de) || destinatario ? "transferencia_enviada" : null);
+    (nombraA(para, ctx.nombre) ? "transferencia_recibida" : null) ??
+    (nombraA(de, ctx.nombre) || destinatario ? "transferencia_enviada" : null);
 
-  const contraparteCruda = tipo === "transferencia_recibida" || tipo === "ingreso" ? de : (destinatario ?? para ?? de);
+  const recibe = sentido === "transferencia_recibida" || sentido === "ingreso";
+  const contraparteCruda = recibe ? de : (destinatario ?? para ?? de);
   const contraparte = contraparteCruda && textoUtil(contraparteCruda) ? nombrePropio(textoUtil(contraparteCruda)) : null;
   const motivo = concepto && !/^(varios|sin concepto|-)$/.test(plano(concepto).trim()) ? textoUtil(concepto) : "";
 
+  const rubro = rubroDe(todo);
+  // Entre cuentas propias: lo dice el comprobante, o el origen y el destino sos vos.
+  const interna = rubro === RUBRO_INTERNO || (nombraA(de, ctx.nombre, 2) && nombraA(destinatario ?? para, ctx.nombre, 2));
+
   return {
-    tipo,
+    tipo: interna ? tipoInterno(importe.signo, sentido) : sentido,
     centavos: importe.centavos,
     fecha: noFutura(buscarFecha(todo, ctx.hoy, { abreviados: true })?.fecha, ctx.hoy),
     descripcion: capitalizar([motivo, contraparte].filter(Boolean).join(" · ")),
     contraparte,
     referencia: referenciaDe(lineas, planas),
     importeDudoso: importe.dudoso || new Set(importes.map((i) => i.centavos)).size > 1,
+    rubro: interna ? RUBRO_INTERNO : rubro,
+    interna,
   };
 }
 
@@ -176,7 +219,8 @@ export function extraerOperaciones(textoOCR: string, ctx: Contexto): OperacionLe
 
   const distintos = new Set(todos.map((i) => i.centavos)).size;
   if (distintos === 1 || COMPROBANTE.test(planas.join("\n"))) {
-    return [leerComprobante(lineas, planas, todos, ctx)];
+    const sinCargos = importes.filter((_, i) => !CARGOS.test(planas[i])).flat();
+    return [leerComprobante(lineas, planas, sinCargos.length ? sinCargos : todos, ctx)];
   }
 
   // ── Listado ──
@@ -204,18 +248,24 @@ export function extraerOperaciones(textoOCR: string, ctx: Contexto): OperacionLe
     for (const importe of importes[i]) {
       const textos = [importe.resto, ...vecinas.map((j) => lineas[j])].map(textoUtil).filter(Boolean);
       const bloque = plano(textos.join("\n"));
-      const titulo = textos.find((t) => !TITULO_GENERICO.test(palabras(t))) ?? textos[0] ?? "";
-      const tipo = sentidoDe(bloque, importe.signo);
-      const esTransferencia = tipo === "transferencia_enviada" || tipo === "transferencia_recibida";
+      // Un renglón dice qué operación es; el otro, con quién o dónde.
+      const detalle = textos.find((t) => !esTipoDeOperacion(t)) ?? "";
+      const titulo = textos.find(esTipoDeOperacion) ?? "";
+      const sentido = sentidoDe(bloque, importe.signo);
+      const rubro = rubroDe(bloque);
+      const interna = rubro === RUBRO_INTERNO || (rubro === "Transferencias" && nombraA(detalle, ctx.nombre, 2));
 
       operaciones.push({
-        tipo,
+        tipo: interna ? tipoInterno(importe.signo, sentido) : sentido,
         centavos: importe.centavos,
-        fecha: noFutura(buscarFecha(bloque, ctx.hoy, { abreviados: true })?.fecha ?? fechaDelGrupo, ctx.hoy),
-        descripcion: capitalizar(nombrePropio(titulo)),
-        contraparte: esTransferencia && titulo && !TITULO_GENERICO.test(palabras(titulo)) ? nombrePropio(titulo) : null,
+        // La fecha del grupo manda: un detalle como "Finde 3-4" no es una fecha.
+        fecha: noFutura(fechaDelGrupo ?? buscarFecha(bloque, ctx.hoy, { abreviados: true })?.fecha, ctx.hoy),
+        descripcion: capitalizar(nombrePropio(detalle || titulo)),
+        contraparte: detalle ? nombrePropio(detalle) : null,
         referencia: null,
         importeDudoso: importe.dudoso,
+        rubro: interna ? RUBRO_INTERNO : rubro,
+        interna,
       });
     }
   }

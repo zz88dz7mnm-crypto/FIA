@@ -90,6 +90,12 @@ export const voz = {
       ? `Anotado. En el frasco ${nombre} te quedan ${formatearImporte(queda)}.`
       : `Anotado. Te pasaste ${formatearImporte(-queda)} del frasco ${nombre}.`,
 
+  borrarMesPregunta: (mes: string, movimientos: number) =>
+    `Vas a borrar todo ${mes}: ${movimientos === 1 ? "1 movimiento" : `${movimientos} movimientos`}, este chat y los frascos armados este mes. No se puede deshacer. ¿Lo borro?`,
+  mesBorrado: (mes: string, movimientos: number) =>
+    `Borré todo ${mes}: ${movimientos === 1 ? "1 movimiento" : `${movimientos} movimientos`}. Arrancamos de cero.`,
+  borradoCancelado: "Listo, no borré nada.",
+
   falla: "No pude guardar eso. Revisá la conexión y probá de nuevo.",
   baseDesactualizada: "A tu base le falta una actualización. Pegá de nuevo el archivo supabase/schema.sql en el SQL Editor de Supabase y volvé a entrar.",
 };

@@ -12,8 +12,14 @@ export type Transaccion = {
   categoriaId: string | null;
   /** Frasco del que se descuenta, si tiene. */
   frascoId: string | null;
+  /** Con quién fue: la persona de una transferencia o el comercio de un pago. */
+  contraparte: string | null;
+  /** Movimiento entre cuentas propias: queda anotado pero no cuenta en los totales. */
+  interna: boolean;
   /** Número de operación leído de un comprobante, si lo hay. */
   referencia: string | null;
+  /** Cómo se cargó: escrito en el chat o leído de una captura. */
+  metodo: "texto" | "imagen" | "manual";
   estado: Estado;
   creadoEn: string;
 };
@@ -22,7 +28,7 @@ export type Transaccion = {
 export type EstadoFrasco = { id: string; nombre: string; asignado: number; gastado: number };
 
 /** Algo de un movimiento propuesto que conviene mirar antes de anotarlo. */
-export type Aviso = "duplicado" | "importe_dudoso" | "sentido" | "sin_fecha";
+export type Aviso = "duplicado" | "importe_dudoso" | "sentido" | "sin_fecha" | "propia";
 
 export type Resumen = {
   periodo: Periodo;
@@ -44,6 +50,8 @@ export type DatosMensaje =
   /** Los movimientos encontrados en una captura, cada uno para revisar por separado. */
   | { clase: "lote"; transaccionIds: string[]; avisos: Record<string, Aviso[]> }
   | { clase: "frascos"; frascos: EstadoFrasco[] }
+  /** Fia pide confirmación antes de borrar todo un mes. */
+  | { clase: "confirmar_borrado"; desde: string; hasta: string }
   | {
       clase: "pregunta";
       falta: "importe" | "tipo";
