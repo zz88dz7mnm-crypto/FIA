@@ -112,19 +112,60 @@ async function resumir(sesion: Sesion, periodo: Periodo): Promise<Resumen & { ca
   return { periodo, desde, entradas, salidas, porCategoria, cantidad: transacciones.length };
 }
 
+/**
+ * La categoría de un gasto es su detalle: "cantina 2000" va a Cantina. Si ya hay una categoría
+ * de gastos que ese detalle nombra, se usa esa; si no, se crea una con ese nombre.
+ */
+async function categoriaDeGasto(sesion: Sesion, detalle: string): Promise<Categoria | null> {
+  if (!detalle) return null;
+  const conocida = clasificar(detalle, sesion.categorias.filter((c) => c.clase === "gasto"));
+  if (conocida) return conocida;
+  const nueva = await sesion.repo.crearCategoria(detalle.slice(0, 60), "gasto");
+  sesion.categorias = [...sesion.categorias, nueva];
+  return nueva;
+}
+
+/** Borra una categoría propia que quedó sin movimientos, para que no se acumulen las de un descarte. */
+async function limpiarCategoria(sesion: Sesion, id: string | null): Promise<void> {
+  const categoria = sesion.categorias.find((c) => c.id === id);
+  if (!categoria?.propia || (await sesion.repo.categoriaEnUso(categoria.id))) return;
+  await sesion.repo.borrarCategoria(categoria.id);
+  sesion.categorias = sesion.categorias.filter((c) => c.id !== categoria.id);
+  sesion.reglas = sesion.reglas.filter((r) => r.categoriaId !== categoria.id);
+}
+
 /** Guarda el movimiento "en revisión" y lo muestra para confirmar. Avisa si parece repetido. */
 async function proponer(sesion: Sesion, borrador: Borrador & { tipo: Tipo; centavos: number }, origenMensajeId: string): Promise<Novedad> {
+  const { tipo, descripcion: detalle, aclaracion } = borrador;
+  const delMotor = sesion.categorias.find((c) => c.id === borrador.categoriaId) ?? null;
+
+  // Primero lo que vos elegiste antes para ese texto. Después: las transferencias van todas juntas,
+  // los ingresos a su categoría, y un gasto a la categoría que lleva el nombre de su detalle.
+  const categoria =
+    sesion.categorias.find((c) => c.id === reglaPara(`${detalle} ${aclaracion}`, sesion.reglas)) ??
+    (esTransferencia(tipo)
+      ? categoriaLlamada(sesion, "Transferencias")
+      : tipo === "ingreso"
+        ? ((delMotor?.clase === "ingreso" ? delMotor : null) ?? categoriaDeIngresos(sesion.categorias))
+        : ((await categoriaDeGasto(sesion, detalle)) ?? (delMotor?.clase === "gasto" ? delMotor : null)));
+
+  // Cuando el detalle ya es el nombre de la categoría, no se repite: se muestra la aclaración.
+  const esLaCategoria = tipo === "gasto" && categoria !== null && palabras(categoria.nombre) === palabras(detalle);
+  const descripcion = esLaCategoria ? aclaracion || detalle : [detalle, aclaracion].filter(Boolean).join(" · ");
+  // Lo que se desglosa dentro de la categoría: la persona de una transferencia, o la aclaración de un gasto.
+  const contraparte = esLaCategoria ? aclaracion || null : tipo === "gasto" ? aclaracion || detalle || null : detalle || null;
+
   // Repetido = mismo tipo, importe, día y detalle. Dos gastos distintos que cuestan igual no avisan.
-  const detalle = palabras(borrador.descripcion);
-  const repetidas = (await sesion.repo.parecidas(borrador)).filter((otra) => palabras(otra.descripcion) === detalle);
+  const repetidas = (await sesion.repo.parecidas(borrador)).filter(
+    (otra) => palabras(otra.descripcion) === palabras(descripcion) && otra.categoriaId === (categoria?.id ?? null),
+  );
   const transaccion = await sesion.repo.crearTransaccion({
-    tipo: borrador.tipo,
+    tipo,
     centavos: borrador.centavos,
     fecha: borrador.fecha,
-    descripcion: borrador.descripcion,
-    // Una transferencia sin otra categoría va a "Transferencias", y su detalle es con quién fue.
-    categoriaId: borrador.categoriaId ?? (esTransferencia(borrador.tipo) ? (categoriaLlamada(sesion, "Transferencias")?.id ?? null) : null),
-    contraparte: esTransferencia(borrador.tipo) && borrador.descripcion ? borrador.descripcion : null,
+    descripcion,
+    categoriaId: categoria?.id ?? null,
+    contraparte,
     frascoId: borrador.frascoId,
     origenMensajeId,
   });
@@ -202,7 +243,7 @@ async function responder(sesion: Sesion, texto: string, anterior: Mensaje | null
     if (completo && pregunta.falta === "importe") {
       // Con varios números en el mensaje original, cada opción trae su propia descripción.
       const opcion = pregunta.opcionesImporte.find((o) => o.centavos === completo!.centavos);
-      if (opcion) completo = { ...completo, descripcion: opcion.descripcion };
+      if (opcion) completo = { ...completo, descripcion: opcion.descripcion, aclaracion: opcion.aclaracion };
     }
     if (completo) {
       return avanzar(sesion, { borrador: completo, opcionesImporte: [], opcionesTipo: pregunta.opcionesTipo }, pregunta.origenMensajeId);
@@ -420,6 +461,20 @@ export async function editar(sesion: Sesion, id: string, cambios: CambiosDeEdici
     resto.categoriaId = categoria.id;
   }
 
+  // El título de un movimiento es su aclaración o, en un gasto sin aclaración, su categoría. Al pasar
+  // un gasto a otra categoría, lo que antes era el título queda como aclaración para no perderse.
+  if (previa) {
+    const categoriaFinal = "categoriaId" in resto ? (resto.categoriaId ?? null) : previa.categoriaId;
+    const cambioDeCategoria = categoriaFinal !== previa.categoriaId;
+    const cambioDeAclaracion = "contraparte" in resto && (resto.contraparte ?? null) !== previa.contraparte;
+    if (cambioDeCategoria || cambioDeAclaracion) {
+      const aclaracion = ("contraparte" in resto ? resto.contraparte : previa.contraparte) || (cambioDeCategoria ? previa.descripcion : "") || null;
+      const esGasto = (resto.tipo ?? previa.tipo) === "gasto";
+      resto.contraparte = aclaracion;
+      resto.descripcion = aclaracion || (esGasto ? nombreDeCategoria(sesion, categoriaFinal) : null) || previa.descripcion;
+    }
+  }
+
   const transaccion = await sesion.repo.actualizarTransaccion(id, { ...resto, estado: "confirmada" });
   if (transaccion.frascoId || "frascoId" in resto) await refrescarFrascos(sesion);
 
@@ -438,12 +493,16 @@ export async function editar(sesion: Sesion, id: string, cambios: CambiosDeEdici
     }
   }
 
+  if (previa && previa.categoriaId !== transaccion.categoriaId) await limpiarCategoria(sesion, previa.categoriaId);
+
   const frase = yaAnotado ? voz.guardado : await fraseDeAnotado(sesion, transaccion);
   return { mensajes: [await decir(sesion, [frase, aprendido].filter(Boolean).join(" "))], transacciones: [transaccion] };
 }
 
-export function descartar(sesion: Sesion, id: string): Promise<Novedad> {
-  return cambiar(sesion, id, { estado: "rechazada" }, () => voz.descartado);
+export async function descartar(sesion: Sesion, id: string): Promise<Novedad> {
+  const novedad = await cambiar(sesion, id, { estado: "rechazada" }, () => voz.descartado);
+  await limpiarCategoria(sesion, novedad.transacciones[0].categoriaId);
+  return novedad;
 }
 
 /** Saca de los totales un movimiento ya anotado. No se borra: queda en el historial. */

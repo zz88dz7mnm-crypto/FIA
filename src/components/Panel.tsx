@@ -9,15 +9,16 @@ import type { Categoria } from "@/lib/motor/categorias";
 import { describirFecha, nombreDeMes, rangoDe, rangoPrevio, type Periodo } from "@/lib/motor/fechas";
 import { formatearCompacto, formatearImporte } from "@/lib/motor/importes";
 import {
+  detalleDeCategoria,
   fechaCorta,
   gastoPorCategoria,
   porciones,
   serie,
   topeRedondo,
   totales,
-  transferenciasPorPersona,
   variacion,
   type GrupoDeGasto,
+  type Porcion,
   type Punto,
 } from "@/lib/panel";
 import { NOMBRE_DE_TIPO, type EstadoFrasco, type Transaccion } from "@/lib/tipos";
@@ -176,8 +177,6 @@ function Contenido({ base, datos, rutaChat }: { base: Base; datos: Datos; rutaCh
   const cuentas = totales(confirmadas);
   const antes = totales(datos.previos.filter(cuenta));
   const cambio = variacion(cuentas.salio, antes.salio);
-  const grupos = gastoPorCategoria(confirmadas, base.categorias);
-  const personas = transferenciasPorPersona(confirmadas);
   const pendientes = datos.movimientos.filter((t) => t.estado === "en_revision");
   const porMes = datos.periodo === "anio";
   const anterior = periodoAnterior(datos.periodo, base.hoy);
@@ -239,30 +238,8 @@ function Contenido({ base, datos, rutaChat }: { base: Base; datos: Datos; rutaCh
           </section>
         </div>
         <section className="order-4 min-w-0 cristal rounded-[28px] p-5 sm:p-6">
-          <h2 className="text-[20px] font-semibold tracking-[-0.01em]">En qué se fue</h2>
-          <Circular grupos={grupos} total={cuentas.salio} />
+          <Reparto confirmadas={confirmadas} categorias={base.categorias} />
         </section>
-        {personas.length > 0 && (
-          <section className="order-5 min-w-0 cristal rounded-[28px] p-5 sm:p-6">
-            <h2 className="text-[20px] font-semibold tracking-[-0.01em]">Transferencias por persona</h2>
-            <ul className="mt-2 divide-y divide-linea text-[15px]">
-              {personas.slice(0, 8).map((persona) => (
-                <li key={persona.nombre} className="py-3">
-                  <p className="truncate font-medium">{persona.nombre}</p>
-                  <p className="cifras mt-0.5 text-[13px] text-tinta-suave">
-                    {[
-                      persona.enviado > 0 && `Le enviaste ${formatearImporte(persona.enviado)}`,
-                      persona.recibido > 0 && `Te envió ${formatearImporte(persona.recibido)}`,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </p>
-                </li>
-              ))}
-            </ul>
-            {personas.length > 8 && <p className="mt-2 text-[13px] text-tinta-suave">Y {personas.length - 8} más, en la lista de movimientos.</p>}
-          </section>
-        )}
         {base.frascos.length > 0 && (
           <section className="order-6 min-w-0 cristal rounded-[28px] p-5 sm:p-6">
             <h2 className="text-[20px] font-semibold tracking-[-0.01em]">Frascos</h2>
@@ -384,16 +361,105 @@ const RADIO = 46;
 const GROSOR = 15;
 const VUELTA = 2 * Math.PI * RADIO;
 
-/**
- * Reparto de lo que salió por tipo de operación. Como mucho seis porciones, cada una con el
- * color fijo de su categoría. La lista de abajo es la leyenda y lleva los valores escritos,
- * así nada depende solo del color.
- */
-function Circular({ grupos, total }: { grupos: GrupoDeGasto[]; total: number }) {
-  const [activa, setActiva] = useState<string | null>(null);
-  const partes = porciones(grupos);
-  if (!partes.length || total <= 0) return <p className="mt-3 text-[15px] text-tinta-suave">No salió plata en este período.</p>;
+const porcentaje = (parte: number) => (parte < 0.01 ? "<1%" : `${Math.round(parte * 100)}%`);
 
+/**
+ * En qué se fue la plata. Arriba de todo, por categoría: todas las transferencias juntas, cada
+ * detalle con su nombre. Al tocar una categoría se entra en ella y se ve su reparto por dentro
+ * (a quién fue cada transferencia, por ejemplo). Cada nivel se puede ver circular o en barras.
+ */
+function Reparto({ confirmadas, categorias }: { confirmadas: Transaccion[]; categorias: Categoria[] }) {
+  const [grafico, setGrafico] = useState<"circular" | "barras">("circular");
+  // undefined: se ven todas las categorías. Un id (o null, "sin clasificar"): se está adentro de esa.
+  const [abierta, setAbierta] = useState<string | null | undefined>(undefined);
+  const [activa, setActiva] = useState<string | null>(null);
+
+  const todas = gastoPorCategoria(confirmadas, categorias);
+  const adentro = abierta !== undefined;
+  const grupos = adentro ? detalleDeCategoria(confirmadas, abierta) : todas;
+  const total = grupos.reduce((suma, g) => suma + g.centavos, 0);
+  const nombreAbierta = adentro ? (todas.find((g) => g.id === abierta)?.nombre ?? categorias.find((c) => c.id === abierta)?.nombre ?? "Sin clasificar") : "";
+
+  const entrar = (id: string | null) => {
+    setAbierta(id);
+    setActiva(null);
+  };
+
+  return (
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <div className="min-w-0">
+          {adentro && (
+            <button
+              type="button"
+              onClick={() => {
+                setAbierta(undefined);
+                setActiva(null);
+              }}
+              className="-ml-1 flex h-8 items-center gap-0.5 rounded-full px-1 text-[14px] font-medium text-acento active:bg-black/5"
+            >
+              <svg viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M10 3 5 8l5 5" />
+              </svg>
+              Todas las categorías
+            </button>
+          )}
+          <h2 className="text-[20px] font-semibold tracking-[-0.01em] break-words">{adentro ? nombreAbierta : "En qué se fue"}</h2>
+        </div>
+        <div role="group" aria-label="Tipo de gráfico" className="flex rounded-full bg-black/5 p-0.5">
+          {(["circular", "barras"] as const).map((tipo) => (
+            <button
+              key={tipo}
+              type="button"
+              aria-pressed={grafico === tipo}
+              onClick={() => setGrafico(tipo)}
+              className={`h-8 rounded-full px-3 text-[13px] font-medium transition-colors ${
+                grafico === tipo ? "bg-white text-tinta shadow-[0_1px_3px_rgb(20_30_70/0.16)]" : "text-tinta-suave"
+              }`}
+            >
+              {tipo === "circular" ? "Circular" : "Barras"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {total <= 0 ? (
+        <p className="mt-3 text-[15px] text-tinta-suave">{adentro ? "No salió plata por acá en este período." : "No salió plata en este período."}</p>
+      ) : grafico === "circular" ? (
+        <Circular partes={porciones(grupos)} total={total} activa={activa} alActivar={setActiva} alEntrar={adentro ? undefined : entrar} />
+      ) : (
+        <BarrasDeReparto grupos={grupos} alEntrar={adentro ? undefined : entrar} />
+      )}
+    </>
+  );
+}
+
+/** Flecha que indica que el renglón abre su detalle. */
+function Entrar() {
+  return (
+    <svg viewBox="0 0 16 16" className="mt-1 size-4 shrink-0 text-tinta-tenue" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m6 3 5 5-5 5" />
+    </svg>
+  );
+}
+
+/**
+ * Circular de hasta seis porciones. La lista de abajo es la leyenda y lleva los valores escritos,
+ * así nada depende solo del color. Si `alEntrar` está, tocar un renglón abre esa categoría.
+ */
+function Circular({
+  partes,
+  total,
+  activa,
+  alActivar,
+  alEntrar,
+}: {
+  partes: Porcion[];
+  total: number;
+  activa: string | null;
+  alActivar: (clave: string | null) => void;
+  alEntrar?: (id: string | null) => void;
+}) {
   // Entre porción y porción queda un hueco fino del color de la tarjeta.
   const hueco = partes.length > 1 ? 1.6 : 0;
   const arcos = partes.map((parte, i) => {
@@ -403,15 +469,14 @@ function Circular({ grupos, total }: { grupos: GrupoDeGasto[]; total: number }) 
   });
   const elegida = partes.find((p) => p.clave === activa);
   const cifra = formatearImporte(elegida ? elegida.centavos : total);
-  const porcentaje = (parte: number) => (parte < 0.01 ? "<1%" : `${Math.round(parte * 100)}%`);
 
-  const alPasar = (clave: string | null) => (evento: React.PointerEvent) => evento.pointerType === "mouse" && setActiva(clave);
-  const alTocar = (clave: string) => () => setActiva((previa) => (previa === clave ? null : clave));
+  const alPasar = (clave: string | null) => (evento: React.PointerEvent) => evento.pointerType === "mouse" && alActivar(clave);
+  const alternar = (clave: string) => alActivar(activa === clave ? null : clave);
 
   return (
     <>
       <div className="relative mx-auto mt-5 size-44">
-        <svg viewBox="0 0 120 120" className="size-full" role="img" aria-label="Reparto de lo que salió, por tipo de operación">
+        <svg viewBox="0 0 120 120" className="size-full" role="img" aria-label="Reparto de lo que salió">
           <g transform="rotate(-90 60 60)">
             {arcos.map((arco) => (
               <circle
@@ -428,7 +493,7 @@ function Circular({ grupos, total }: { grupos: GrupoDeGasto[]; total: number }) 
                 className="cursor-pointer transition-[opacity,stroke-width] duration-150"
                 onPointerEnter={alPasar(arco.clave)}
                 onPointerLeave={alPasar(null)}
-                onClick={alTocar(arco.clave)}
+                onClick={() => alternar(arco.clave)}
               />
             ))}
           </g>
@@ -447,32 +512,73 @@ function Circular({ grupos, total }: { grupos: GrupoDeGasto[]; total: number }) 
       <ul className="-mx-2 mt-4 flex flex-col gap-0.5">
         {[...partes]
           .sort((a, b) => b.centavos - a.centavos)
-          .map((parte) => (
-            <li key={parte.clave}>
-              <button
-                type="button"
-                aria-pressed={activa === parte.clave}
-                onPointerEnter={alPasar(parte.clave)}
-                onPointerLeave={alPasar(null)}
-                onFocus={() => setActiva(parte.clave)}
-                onBlur={() => setActiva(null)}
-                onClick={alTocar(parte.clave)}
-                className={`flex w-full items-start gap-2.5 rounded-xl px-2 py-2 text-left text-[15px] transition-colors ${
-                  activa === parte.clave ? "bg-black/5" : ""
-                }`}
-              >
-                <span aria-hidden="true" className="mt-[5px] size-3 shrink-0 rounded-[4px]" style={{ background: parte.color }} />
-                {/* El nombre entero, en dos renglones si hace falta: cortado, "débito" y "crédito" se verían iguales. */}
-                <span className="min-w-0 flex-1">
-                  <span className="block leading-snug">{parte.nombre}</span>
-                  <span className="cifras block text-[12px] leading-snug text-tinta-suave">{porcentaje(parte.parte)} de lo que salió</span>
-                </span>
-                <span className="cifras shrink-0 font-medium">{formatearImporte(parte.centavos)}</span>
-              </button>
-            </li>
-          ))}
+          .map((parte) => {
+            const abre = alEntrar && parte.clave !== "otras";
+            return (
+              <li key={parte.clave}>
+                <button
+                  type="button"
+                  onPointerEnter={alPasar(parte.clave)}
+                  onPointerLeave={alPasar(null)}
+                  onFocus={() => alActivar(parte.clave)}
+                  onBlur={() => alActivar(null)}
+                  onClick={() => (abre ? alEntrar(parte.clave === "sin-nombre" ? null : parte.clave) : alternar(parte.clave))}
+                  className={`flex w-full items-start gap-2.5 rounded-xl px-2 py-2 text-left text-[15px] transition-colors ${
+                    activa === parte.clave ? "bg-black/5" : ""
+                  }`}
+                >
+                  <span aria-hidden="true" className="mt-[5px] size-3 shrink-0 rounded-[4px]" style={{ background: parte.color }} />
+                  {/* El nombre entero, en dos renglones si hace falta: cortados, dos nombres parecidos se verían iguales. */}
+                  <span className="min-w-0 flex-1">
+                    <span className="block leading-snug break-words">{parte.nombre}</span>
+                    <span className="cifras block text-[12px] leading-snug text-tinta-suave">{porcentaje(parte.parte)}</span>
+                  </span>
+                  <span className="cifras shrink-0 font-medium">{formatearImporte(parte.centavos)}</span>
+                  {abre && <Entrar />}
+                </button>
+              </li>
+            );
+          })}
       </ul>
     </>
+  );
+}
+
+/** El mismo reparto en barras: entran todos los renglones, del más grande al más chico. */
+function BarrasDeReparto({ grupos, alEntrar }: { grupos: GrupoDeGasto[]; alEntrar?: (id: string | null) => void }) {
+  const mayor = grupos[0]?.centavos ?? 0;
+  return (
+    <ul className="-mx-2 mt-4 flex flex-col gap-0.5">
+      {grupos.map((grupo) => {
+        const contenido = (
+          <>
+            <span className="min-w-0 flex-1">
+              <span className="flex items-baseline justify-between gap-3">
+                <span className="min-w-0 leading-snug break-words">{grupo.nombre}</span>
+                <span className="cifras shrink-0 font-medium">{formatearImporte(grupo.centavos)}</span>
+              </span>
+              <span className="mt-1.5 block h-1.5 rounded-full bg-acento/12">
+                <span className="block h-full rounded-full bg-acento" style={{ width: `${Math.max(2, (grupo.centavos / mayor) * 100)}%` }} />
+              </span>
+              <span className="cifras mt-1 block text-[12px] leading-snug text-tinta-suave">{porcentaje(grupo.parte)}</span>
+            </span>
+            {alEntrar && <Entrar />}
+          </>
+        );
+        const clase = "flex w-full items-start gap-2.5 rounded-xl px-2 py-2 text-left text-[15px]";
+        return (
+          <li key={grupo.id ?? "sin-nombre"}>
+            {alEntrar ? (
+              <button type="button" onClick={() => alEntrar(grupo.id)} className={`${clase} transition-colors active:bg-black/5`}>
+                {contenido}
+              </button>
+            ) : (
+              <div className={clase}>{contenido}</div>
+            )}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

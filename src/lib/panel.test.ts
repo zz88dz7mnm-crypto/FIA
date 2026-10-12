@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { rangoPrevio } from "./motor/fechas";
 import { CATEGORIAS_DE_MUESTRA } from "./motor/muestras";
-import { gastoPorCategoria, porciones, serie, topeRedondo, totales, transferenciasPorPersona, variacion, type GrupoDeGasto } from "./panel";
+import { detalleDeCategoria, gastoPorCategoria, porciones, serie, topeRedondo, totales, variacion, type GrupoDeGasto } from "./panel";
 import type { Transaccion } from "./tipos";
 
 const mov = (tipo: Transaccion["tipo"], centavos: number, fecha: string, categoriaId: string | null = null, contraparte: string | null = null): Transaccion => ({
@@ -68,61 +68,64 @@ describe("panel", () => {
     expect(rangoPrevio("anio", "2026-10-11")).toEqual({ desde: "2025-01-01", hasta: "2025-12-31" });
   });
 
-  it("agrupa las transferencias por persona", () => {
-    const personas = transferenciasPorPersona([
-      mov("transferencia_enviada", 120000, "2026-10-02", null, "Valentin Torres"),
-      mov("transferencia_enviada", 500000, "2026-10-05", null, "valentin torres"),
-      mov("transferencia_recibida", 1250000, "2026-10-06", null, "Pedro Gomez"),
-      mov("transferencia_recibida", 30000, "2026-10-07", null, "Valentin Torres"),
-      mov("gasto", 999999, "2026-10-07"),
-    ]);
-    expect(personas).toEqual([
-      { nombre: "Pedro Gomez", enviado: 0, recibido: 1250000, cantidad: 1 },
-      { nombre: "Valentin Torres", enviado: 620000, recibido: 30000, cantidad: 3 },
-    ]);
-  });
-
   describe("gráfico circular", () => {
     const grupo = (id: string | null, nombre: string, centavos: number): GrupoDeGasto => ({ id, nombre, centavos, parte: centavos / 1000 });
 
-    it("cada tipo de operación lleva siempre su color, en un orden fijo", () => {
+    it("un mismo nombre lleva siempre el mismo color, sea cual sea su importe", () => {
+      const junio = porciones([grupo("c", "Cantina", 700), grupo("t", "Transferencias", 300)]);
+      const julio = porciones([grupo("t", "Transferencias", 900), grupo("c", "Cantina", 50), grupo("k", "Kiosco", 50)]);
+      const color = (lista: typeof junio, nombre: string) => lista.find((p) => p.nombre === nombre)?.color;
+      expect(color(junio, "Transferencias")).toBe("#2a78d6");
+      expect(color(julio, "Transferencias")).toBe("#2a78d6");
+      expect(color(junio, "Cantina")).toBe(color(julio, "Cantina"));
+    });
+
+    it("dos porciones nunca comparten color, y lo que no tiene nombre va en gris", () => {
       const circulo = porciones([
-        grupo("d", "Pagos con tarjeta de débito", 500),
-        grupo("t", "Transferencias", 300),
-        grupo(null, "Sin clasificar", 200),
+        grupo("a", "Cantina", 300),
+        grupo("b", "Kiosco", 250),
+        grupo("c", "Taxi", 200),
+        grupo("d", "Apuntes", 150),
+        grupo(null, "Sin clasificar", 100),
       ]);
-      expect(circulo.map((p) => [p.nombre, p.color])).toEqual([
-        ["Transferencias", "#2a78d6"],
-        ["Pagos con tarjeta de débito", "#eb6834"],
-        ["Sin clasificar", "#8e8e93"],
-      ]);
-      // El color no depende de qué más haya ese mes.
-      expect(porciones([grupo("d", "Pagos con tarjeta de débito", 10)])[0].color).toBe("#eb6834");
+      const colores = circulo.map((p) => p.color);
+      expect(new Set(colores).size).toBe(colores.length);
+      expect(circulo.find((p) => p.nombre === "Sin clasificar")?.color).toBe("#8e8e93");
     });
 
     it("nunca muestra más de seis porciones: las más chicas van a Otras", () => {
       const circulo = porciones([
         grupo("t", "Transferencias", 300),
-        grupo("d", "Pagos con tarjeta de débito", 250),
-        grupo("q", "Pagos con QR", 150),
-        grupo("s", "Pagos de servicios", 120),
-        grupo("c", "Pagos con tarjeta de crédito", 90),
-        grupo("i", "Impuestos", 50),
-        grupo("e", "Extracciones de efectivo", 40),
+        grupo("a", "Cantina", 250),
+        grupo("b", "Kiosco", 150),
+        grupo("c", "Taxi", 120),
+        grupo("d", "Apuntes", 90),
+        grupo("e", "Cine", 50),
+        grupo("f", "Farmacia", 40),
       ]);
       expect(circulo).toHaveLength(6);
       expect(circulo.at(-1)).toMatchObject({ nombre: "Otras", centavos: 90, color: "#c7c7cc" });
       expect(circulo.reduce((suma, p) => suma + p.centavos, 0)).toBe(1000);
     });
+  });
 
-    it("de las categorías propias, solo la más grande lleva color", () => {
-      const circulo = porciones([grupo("x", "Celular", 600), grupo("t", "Transferencias", 300), grupo("y", "Gimnasio", 100)]);
-      expect(circulo.map((p) => [p.nombre, p.color])).toEqual([
-        ["Transferencias", "#2a78d6"],
-        ["Celular", "#e34948"],
-        ["Otras", "#c7c7cc"],
-      ]);
-    });
+  it("desglosa una categoría por su aclaración", () => {
+    const movimientos = [
+      mov("transferencia_enviada", 120000, "2026-10-02", "transferencias", "Valentin Torres"),
+      mov("transferencia_enviada", 500000, "2026-10-05", "transferencias", "valentin torres"),
+      mov("transferencia_enviada", 380000, "2026-10-06", "transferencias", "Marta"),
+      mov("transferencia_recibida", 999999, "2026-10-06", "transferencias", "Pedro"),
+      mov("gasto", 200000, "2026-10-07", "cantina"),
+      mov("gasto", 300000, "2026-10-07", "cantina", "Almuerzo"),
+    ];
+    expect(detalleDeCategoria(movimientos, "transferencias")).toEqual([
+      { id: "valentin torres", nombre: "Valentin Torres", centavos: 620000, parte: 0.62 },
+      { id: "marta", nombre: "Marta", centavos: 380000, parte: 0.38 },
+    ]);
+    expect(detalleDeCategoria(movimientos, "cantina").map((g) => [g.nombre, g.centavos])).toEqual([
+      ["Almuerzo", 300000],
+      ["Sin aclaración", 200000],
+    ]);
   });
 
   it("redondea el tope del eje", () => {

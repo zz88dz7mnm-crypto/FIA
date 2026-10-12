@@ -5,6 +5,8 @@ export type Categoria = {
   nombre: string;
   clase: "gasto" | "ingreso";
   palabrasClave: string[];
+  /** Creada a partir de un detalle o a mano; las de base (por tipo de operación) no lo son. */
+  propia?: boolean;
 };
 
 /** Regla del usuario: si aparece `patron`, va a esa categoría. Gana sobre las palabras base. */

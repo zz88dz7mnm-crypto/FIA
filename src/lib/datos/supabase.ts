@@ -50,7 +50,16 @@ const aMensaje = (f: FilaMensaje): Mensaje => ({
 });
 
 type FilaPerfil = { nombre: string | null; zona_horaria: string };
-type FilaCategoria = { id: string; nombre: string; clase: "gasto" | "ingreso"; palabras_clave: string[] | null };
+type FilaCategoria = { id: string; usuario_id: string | null; nombre: string; clase: "gasto" | "ingreso"; palabras_clave: string[] | null };
+
+const COLUMNAS_CATEGORIA = "id, usuario_id, nombre, clase, palabras_clave";
+const aCategoria = (f: FilaCategoria) => ({
+  id: f.id,
+  nombre: f.nombre,
+  clase: f.clase,
+  palabrasClave: f.palabras_clave ?? [],
+  propia: f.usuario_id !== null,
+});
 type FilaRegla = { patron: string; categoria_id: string };
 
 /** Lanza si Supabase devolvió error; si no, entrega los datos con el tipo de fila esperado. */
@@ -73,14 +82,21 @@ export function repositorioSupabase(db: SupabaseClient, usuarioId: string): Repo
       exigir<unknown>(await db.from("perfiles").update({ nombre }).eq("id", usuarioId).select("id"));
     },
     async categorias() {
-      const filas = exigir<FilaCategoria[]>(await db.from("categorias").select("id, nombre, clase, palabras_clave").order("nombre"));
-      return filas.map((f) => ({ id: f.id, nombre: f.nombre, clase: f.clase, palabrasClave: f.palabras_clave ?? [] }));
+      const filas = exigir<FilaCategoria[]>(await db.from("categorias").select(COLUMNAS_CATEGORIA).order("nombre"));
+      return filas.map(aCategoria);
     },
     async crearCategoria(nombre, clase) {
-      const fila = exigir<FilaCategoria>(
-        await db.from("categorias").insert({ nombre, clase }).select("id, nombre, clase, palabras_clave").single(),
+      const fila = exigir<FilaCategoria>(await db.from("categorias").insert({ nombre, clase }).select(COLUMNAS_CATEGORIA).single());
+      return aCategoria(fila);
+    },
+    async categoriaEnUso(id) {
+      const filas = exigir<{ id: string }[]>(
+        await db.from("transacciones").select("id").eq("categoria_id", id).neq("estado", "rechazada").limit(1),
       );
-      return { id: fila.id, nombre: fila.nombre, clase: fila.clase, palabrasClave: fila.palabras_clave ?? [] };
+      return filas.length > 0;
+    },
+    async borrarCategoria(id) {
+      exigir<unknown>(await db.from("categorias").delete().eq("id", id).select("id"));
     },
     async guardarRegla(patron, categoriaId) {
       exigir<unknown>(
@@ -236,6 +252,7 @@ function aColumnas(cambios: CambiosTransaccion): Record<string, unknown> {
   if (cambios.descripcion !== undefined) columnas.descripcion = cambios.descripcion;
   if (cambios.categoriaId !== undefined) columnas.categoria_id = cambios.categoriaId;
   if (cambios.frascoId !== undefined) columnas.frasco_id = cambios.frascoId;
+  if (cambios.contraparte !== undefined) columnas.contraparte = cambios.contraparte;
   if (cambios.interna !== undefined) columnas.es_interna = cambios.interna;
   if (cambios.estado !== undefined) columnas.estado = cambios.estado;
   return columnas;

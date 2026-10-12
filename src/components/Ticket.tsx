@@ -6,7 +6,7 @@ import type { Categoria } from "@/lib/motor/categorias";
 import { describirFecha } from "@/lib/motor/fechas";
 import { buscarImportes, formatearImporte } from "@/lib/motor/importes";
 import type { FrascoConocido, Tipo } from "@/lib/motor/interpretar";
-import { plano } from "@/lib/motor/texto";
+import { palabras, plano } from "@/lib/motor/texto";
 import { ES_ENTRADA, NOMBRE_DE_TIPO, type Aviso, type Transaccion } from "@/lib/tipos";
 
 export type AccionesDeTicket = {
@@ -69,6 +69,7 @@ export function Ticket({ transaccion: t, categorias, frascos, hoy, avisos = [], 
   const [editando, setEditando] = useState(false);
   const categoria = categorias.find((c) => c.id === t.categoriaId)?.nombre;
   const frasco = frascos.find((f) => f.id === t.frascoId)?.nombre;
+  const repiteCategoria = categoria !== undefined && palabras(categoria) === palabras(t.descripcion);
   const apagado = t.estado === "rechazada" || t.estado === "anulada";
   const pendiente = t.estado === "en_revision";
   // Mientras no se sepa si la plata entró o salió, no se muestra como ninguna de las dos.
@@ -107,10 +108,13 @@ export function Ticket({ transaccion: t, categorias, frascos, hoy, avisos = [], 
             />
           </p>
           <p className="mt-2 text-[17px] leading-snug font-medium break-words">{t.descripcion || "Sin detalle"}</p>
-          <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[15px] text-tinta-suave">
-            <span className={categoria ? "" : "text-tinta-tenue"}>{categoria ?? "Sin clasificar"}</span>
-            {frasco && <span className="rounded-full bg-acento/10 px-2 py-0.5 text-[13px] font-medium text-acento">Frasco {frasco}</span>}
-          </p>
+          {/* Cuando el detalle ya es el nombre de la categoría, no se escribe dos veces. */}
+          {(!repiteCategoria || frasco) && (
+            <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[15px] text-tinta-suave">
+              {!repiteCategoria && <span className={categoria ? "" : "text-tinta-tenue"}>{categoria ?? "Sin clasificar"}</span>}
+              {frasco && <span className="rounded-full bg-acento/10 px-2 py-0.5 text-[13px] font-medium text-acento">Frasco {frasco}</span>}
+            </p>
+          )}
 
           {visibles.length > 0 && (
             <ul className="mt-2.5 grid gap-1 text-[13px] leading-snug">
@@ -209,7 +213,7 @@ function Formulario({
   const [importe, setImporte] = useState(formatearImporte(t.centavos).replace("$", ""));
   const [categoriaId, setCategoriaId] = useState(t.categoriaId ?? "");
   const [frascoId, setFrascoId] = useState(t.frascoId ?? "");
-  const [descripcion, setDescripcion] = useState(t.descripcion);
+  const [aclaracion, setAclaracion] = useState(t.contraparte ?? "");
   const [fecha, setFecha] = useState(t.fecha);
   const [interna, setInterna] = useState(t.interna);
   const [error, setError] = useState("");
@@ -235,7 +239,7 @@ function Formulario({
       ...(categoriaId === CATEGORIA_NUEVA ? { categoriaNueva: categoriaNueva.trim() } : { categoriaId: categoriaId || null }),
       // Un frasco solo descuenta plata que sale de verdad.
       frascoId: ES_ENTRADA[tipo] || interna ? null : frascoId || null,
-      descripcion: descripcion.trim(),
+      contraparte: aclaracion.trim() || null,
       fecha,
       interna,
     });
@@ -246,10 +250,6 @@ function Formulario({
       <label htmlFor={`${id}-importe`} className="grid gap-1">
         Importe
         <input id={`${id}-importe`} inputMode="decimal" value={importe} onChange={(e) => setImporte(e.target.value)} className={CAMPO} />
-      </label>
-      <label htmlFor={`${id}-detalle`} className="grid gap-1">
-        Detalle
-        <input id={`${id}-detalle`} value={descripcion} onChange={(e) => setDescripcion(e.target.value)} className={CAMPO} />
       </label>
       <label htmlFor={`${id}-categoria`} className="grid gap-1">
         Categoría
@@ -269,6 +269,10 @@ function Formulario({
           <input id={`${id}-nueva`} value={categoriaNueva} onChange={(e) => setCategoriaNueva(e.target.value)} maxLength={40} className={CAMPO} />
         </label>
       )}
+      <label htmlFor={`${id}-aclaracion`} className="grid gap-1">
+        {tipo === "transferencia_enviada" || tipo === "transferencia_recibida" ? "Persona" : "Aclaración (opcional)"}
+        <input id={`${id}-aclaracion`} value={aclaracion} onChange={(e) => setAclaracion(e.target.value)} maxLength={80} className={CAMPO} />
+      </label>
       {frascos.length > 0 && !ES_ENTRADA[tipo] && !interna && (
         <label htmlFor={`${id}-frasco`} className="grid gap-1">
           Frasco

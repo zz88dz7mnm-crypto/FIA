@@ -10,7 +10,10 @@ export type Borrador = {
   tipo: Tipo | null;
   centavos: number | null;
   categoriaId: string | null;
+  /** El detalle: qué fue. En un gasto es lo que da nombre a la categoría ("Cantina"). */
   descripcion: string;
+  /** Aclaración opcional sobre el detalle ("almuerzo"). Vacía si no hay. */
+  aclaracion: string;
   fecha: string;
   importeDudoso: boolean;
   /** Frasco del que se descuenta el gasto, si el mensaje nombra uno. */
@@ -20,7 +23,7 @@ export type Borrador = {
 /** Un frasco, tal como lo necesita el motor para reconocerlo por su nombre. */
 export type FrascoConocido = { id: string; nombre: string };
 
-export type OpcionImporte = { centavos: number; descripcion: string };
+export type OpcionImporte = { centavos: number; descripcion: string; aclaracion: string };
 
 export type Intencion =
   | {
@@ -106,7 +109,7 @@ function buscarTipo(textoPlano: string): (Tramo & { tipo: Tipo }) | null {
 const RELLENO_INICIO = /^(en|de|del|por|para|a|al|el|la|los|las|un|una|unos|unas|pesos|con|y|que)\s+/i;
 const RELLENO_FIN = /\s+(en|de|del|por|para|a|al|el|la|pesos|con|y)$/i;
 const SOLO_RELLENO = /^(en|de|del|por|para|a|al|el|la|los|las|un|una|pesos|con|y|que)$/i;
-const BORDES = /^[\s,.;:¿?¡!\-–]+|[\s,.;:¿?¡!\-–]+$/g;
+const BORDES = /^[\s,.;:¿?¡!()\-–]+|[\s,.;:¿?¡!()\-–]+$/g;
 
 // "con débito", "con tarjeta de crédito", "por QR": dicen cómo se pagó, no qué se pagó.
 const MEDIO_DE_PAGO = /(?<![\p{L}\p{N}])(con|por|en)\s+(la\s+)?(tarjeta\s+de\s+)?(d[eé]bito|cr[eé]dito|qr|tarjeta)(?![\p{L}\p{N}])/giu;
@@ -123,6 +126,32 @@ function limpiarDescripcion(texto: string): string {
     t = t.replace(RELLENO_INICIO, "").replace(RELLENO_FIN, "").replace(BORDES, "");
   }
   return SOLO_RELLENO.test(t) ? "" : capitalizar(t);
+}
+
+type Detalle = { descripcion: string; aclaracion: string };
+
+/**
+ * Separa el detalle de su aclaración. Si hay texto a los dos lados del importe, lo de antes
+ * es el detalle y lo de después la aclaración ("cantina 2000 almuerzo"). Si no, los parte una
+ * coma, un guion suelto o un paréntesis ("gasté 2000 en cantina, almuerzo").
+ */
+function partir(texto: string, quitar: Tramo[], importe: Tramo | null): Detalle {
+  // Lo que no es detalle (verbo, fecha, importe) se tapa con espacios, sin correr las posiciones.
+  let tapado = texto;
+  for (const tramo of importe ? [...quitar, importe] : quitar) {
+    tapado = tapado.slice(0, tramo.inicio) + " ".repeat(tramo.fin - tramo.inicio) + tapado.slice(tramo.fin);
+  }
+  tapado = tapado.replace(/\btransferencias?\b/gi, (palabra) => " ".repeat(palabra.length));
+
+  if (importe) {
+    const antes = limpiarDescripcion(tapado.slice(0, importe.inicio));
+    const despues = limpiarDescripcion(tapado.slice(importe.fin));
+    if (antes && despues) return { descripcion: antes, aclaracion: despues };
+  }
+  const [principal, ...resto] = tapado.split(/,|\s-\s|\(/);
+  const descripcion = limpiarDescripcion(principal);
+  const aclaracion = limpiarDescripcion(resto.join(", "));
+  return descripcion ? { descripcion, aclaracion } : { descripcion: aclaracion, aclaracion: "" };
 }
 
 /** El frasco cuyo nombre aparece en el texto como palabras enteras; si hay varios, el de nombre más largo. */
@@ -181,19 +210,18 @@ export function categoriaDeIngresos(categorias: Categoria[]): Categoria | null {
 
 function armarMovimiento(
   partes: { tipo: Tipo | null; transferenciaSinSentido: boolean; fecha: string; frascoId: string | null },
-  importes: { centavos: number; dudoso: boolean; descripcion: string }[],
-  descripcionBase: string,
+  importes: ({ centavos: number; dudoso: boolean } & Detalle)[],
+  base: Detalle,
   textoCategoria: string,
   ctx: Contexto,
 ): Intencion {
   const unico = importes.length === 1 ? importes[0] : null;
-  const descripcion = unico ? unico.descripcion : descripcionBase;
+  const { descripcion, aclaracion } = unico ?? base;
   const categoria = clasificar(textoCategoria || descripcion, ctx.categorias, ctx.reglas);
 
-  // Sin verbo que lo diga, es un gasto (o un ingreso si la categoría es de ingresos). No se anota
-  // solo: va a la tarjeta de confirmación, donde se puede corregir.
-  let tipo = partes.tipo;
-  if (!tipo && !partes.transferenciaSinSentido) tipo = categoria?.clase ?? "gasto";
+  // Sin verbo que lo diga: una transferencia es enviada, y lo demás es un gasto (o un ingreso si
+  // la categoría es de ingresos). No se anota solo: va a la tarjeta de confirmación, donde se corrige.
+  const tipo = partes.tipo ?? (partes.transferenciaSinSentido ? "transferencia_enviada" : (categoria?.clase ?? "gasto"));
 
   let categoriaId = categoria?.id ?? null;
   if (!categoriaId && tipo === "ingreso") categoriaId = categoriaDeIngresos(ctx.categorias)?.id ?? null;
@@ -205,12 +233,13 @@ function armarMovimiento(
       centavos: unico?.centavos ?? null,
       categoriaId,
       descripcion,
+      aclaracion,
       fecha: partes.fecha,
       importeDudoso: unico?.dudoso ?? false,
       frascoId: tipo === "ingreso" || tipo === "transferencia_recibida" ? null : partes.frascoId,
     },
-    falta: !unico ? "importe" : !tipo ? "tipo" : null,
-    opcionesImporte: importes.length > 1 ? importes.map(({ centavos, descripcion: d }) => ({ centavos, descripcion: d })) : [],
+    falta: unico ? null : "importe",
+    opcionesImporte: importes.length > 1 ? importes.map((i) => ({ centavos: i.centavos, descripcion: i.descripcion, aclaracion: i.aclaracion })) : [],
     opcionesTipo: partes.transferenciaSinSentido ? TRANSFERENCIAS : GASTO_O_INGRESO,
   };
 }
@@ -232,15 +261,16 @@ function interpretarFormal(campos: string[], ctx: Contexto): Intencion | null {
   const resto = campos.slice(2).map((c) => c.trim()).filter(Boolean);
   const fecha = buscarFecha(plano(resto.join(" ; ")), ctx.hoy);
   const sinFecha = fecha ? resto.filter((c) => !buscarFecha(plano(c), ctx.hoy)) : resto;
-  // Con dos campos, el primero es la categoría y el segundo la descripción. Si el primero
-  // no es una categoría conocida, no se pierde: pasa a formar parte de la descripción.
-  const primeroEsCategoria = sinFecha.length > 1 && clasificar(sinFecha[0], ctx.categorias, ctx.reglas) !== null;
-  const descripcion = limpiarDescripcion((primeroEsCategoria ? sinFecha.slice(1) : sinFecha).join(" "));
+  // El tercer campo es el detalle (la categoría); lo que siga, la aclaración.
+  const detalle: Detalle = {
+    descripcion: limpiarDescripcion(sinFecha[0] ?? ""),
+    aclaracion: limpiarDescripcion(sinFecha.slice(1).join(", ")),
+  };
 
   return armarMovimiento(
     { tipo: tipo.tipo, transferenciaSinSentido: false, fecha: fecha?.fecha ?? ctx.hoy, frascoId: buscarFrasco(campos.join(" "), ctx.frascos)?.id ?? null },
-    hallados.slice(0, 1).map((i) => ({ centavos: i.centavos, dudoso: i.dudoso, descripcion })),
-    descripcion,
+    hallados.slice(0, 1).map((i) => ({ centavos: i.centavos, dudoso: i.dudoso, ...detalle })),
+    detalle,
     sinFecha.join(" "),
     ctx,
   );
@@ -302,22 +332,20 @@ export function interpretar(mensaje: string, ctx: Contexto): Intencion {
   // ── Movimientos ──
   const transferenciaSinSentido = !tipo && /\btransferencias?\b/.test(p);
   const fijos: Tramo[] = [tipo, fecha].filter((t): t is NonNullable<typeof t> => t !== null);
-  const describir = (extra: Tramo[]) =>
-    limpiarDescripcion(quitarTramos(texto, [...fijos, ...extra]).replace(/\btransferencias?\b/gi, " "));
-
-  const descripcionBase = describir([]);
-  const candidatos = importes.map((i) => ({ centavos: i.centavos, dudoso: i.dudoso, descripcion: describir([i]) }));
+  const base = partir(texto, fijos, null);
+  const candidatos = importes.map((i) => ({ centavos: i.centavos, dudoso: i.dudoso, ...partir(texto, fijos, i) }));
   const hayCategoria = clasificar(texto, ctx.categorias, ctx.reglas) !== null;
 
   if (!importes.length && !tipo && !transferenciaSinSentido && !hayCategoria) return { clase: "desconocido" };
   // Un texto suelto sin importe ni verbo ("qué lindo día") no es un movimiento aunque nombre una categoría.
-  if (!importes.length && !tipo && !transferenciaSinSentido && palabras(descripcionBase).split(" ").length > 3) return { clase: "desconocido" };
+  const largo = palabras(`${base.descripcion} ${base.aclaracion}`).split(" ").length;
+  if (!importes.length && !tipo && !transferenciaSinSentido && largo > 3) return { clase: "desconocido" };
 
   // La categoría se busca en el mensaje entero: el medio de pago no queda en la descripción.
   return armarMovimiento(
     { tipo: tipo?.tipo ?? null, transferenciaSinSentido, fecha: fecha?.fecha ?? ctx.hoy, frascoId: buscarFrasco(texto, ctx.frascos)?.id ?? null },
     candidatos,
-    descripcionBase,
+    base,
     texto,
     ctx,
   );

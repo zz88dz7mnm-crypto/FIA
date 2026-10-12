@@ -12,9 +12,6 @@ export type Punto = { clave: string; etiqueta: string; salio: number; entro: num
 
 export type GrupoDeGasto = { id: string | null; nombre: string; centavos: number; parte: number };
 
-/** Lo que se le envió y lo que se recibió de una misma persona. */
-export type Persona = { nombre: string; enviado: number; recibido: number; cantidad: number };
-
 const MESES_CORTOS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 
 export function totales(confirmadas: Transaccion[]): Totales {
@@ -73,78 +70,95 @@ export function topeRedondo(maximo: number): number {
   return [1, 2, 5, 10].map((paso) => paso * magnitud).find((tope) => tope >= maximo)!;
 }
 
-/** Las transferencias agrupadas por persona, ordenadas por cuánta plata se movió con cada una. */
-export function transferenciasPorPersona(confirmadas: Transaccion[]): Persona[] {
-  const personas = new Map<string, Persona>();
-  for (const t of confirmadas) {
-    if (t.tipo !== "transferencia_enviada" && t.tipo !== "transferencia_recibida") continue;
-    const nombre = (t.contraparte ?? t.descripcion).trim() || "Sin nombre";
-    const clave = nombre.toLocaleLowerCase("es-AR");
-    const persona = personas.get(clave) ?? { nombre, enviado: 0, recibido: 0, cantidad: 0 };
-    if (t.tipo === "transferencia_enviada") persona.enviado += t.centavos;
-    else persona.recibido += t.centavos;
-    persona.cantidad += 1;
-    personas.set(clave, persona);
+/** Una porción del gráfico circular. El color es del nombre: no cambia según el período ni el importe. */
+export type Porcion = { clave: string; nombre: string; centavos: number; parte: number; color: string };
+
+// La paleta, en el orden en que se validó para que las porciones vecinas se distingan (también con daltonismo).
+const PALETA = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"];
+// Los tipos de operación de siempre tienen su lugar fijo en la paleta.
+const LUGAR_FIJO: Record<string, number> = {
+  transferencias: 0,
+  "pagos con tarjeta de debito": 1,
+  "pagos con qr": 2,
+  "pagos de servicios": 3,
+  "pagos con tarjeta de credito": 4,
+  impuestos: 5,
+  "extracciones de efectivo": 6,
+};
+const COLOR_SIN_NOMBRE = "#8e8e93";
+const COLOR_OTRAS = "#c7c7cc";
+const PORCIONES_MAXIMAS = 6;
+
+/** Un lugar de la paleta que sale del nombre: el mismo nombre cae siempre en el mismo color. */
+function lugarPorNombre(nombre: string): number {
+  let suma = 0;
+  for (const letra of palabras(nombre)) suma = (suma * 31 + letra.charCodeAt(0)) >>> 0;
+  return suma % PALETA.length;
+}
+
+/**
+ * Convierte grupos de gasto en porciones: como mucho seis, las más chicas juntas en "Otras".
+ * Sirve tanto para las categorías como para el desglose dentro de una (personas, aclaraciones).
+ */
+export function porciones(grupos: GrupoDeGasto[]): Porcion[] {
+  const total = grupos.reduce((suma, g) => suma + g.centavos, 0);
+  const porTamanio = [...grupos].sort((a, b) => b.centavos - a.centavos);
+  const visibles = porTamanio.length > PORCIONES_MAXIMAS ? porTamanio.slice(0, PORCIONES_MAXIMAS - 1) : porTamanio;
+  const otras = porTamanio.slice(visibles.length).reduce((suma, g) => suma + g.centavos, 0);
+
+  // Primero se sientan los que tienen lugar fijo; después el resto por orden alfabético, cada uno
+  // en el lugar que le da su nombre o, si está ocupado, en el siguiente libre.
+  const ocupados = new Set<number>();
+  const lugares = new Map<GrupoDeGasto, number>();
+  const conNombre = visibles.filter((g) => g.id !== null);
+  const fijo = (g: GrupoDeGasto) => LUGAR_FIJO[palabras(g.nombre)];
+  for (const grupo of conNombre.filter((g) => fijo(g) !== undefined)) {
+    ocupados.add(fijo(grupo));
+    lugares.set(grupo, fijo(grupo));
   }
-  return [...personas.values()].sort((a, b) => b.enviado + b.recibido - (a.enviado + a.recibido));
+  for (const grupo of conNombre.filter((g) => fijo(g) === undefined).sort((a, b) => a.nombre.localeCompare(b.nombre, "es"))) {
+    let lugar = lugarPorNombre(grupo.nombre);
+    while (ocupados.has(lugar)) lugar = (lugar + 1) % PALETA.length;
+    ocupados.add(lugar);
+    lugares.set(grupo, lugar);
+  }
+
+  const resultado: Porcion[] = visibles
+    .map((g) => ({ grupo: g, lugar: lugares.get(g) ?? PALETA.length }))
+    .sort((a, b) => a.lugar - b.lugar)
+    .map(({ grupo, lugar }) => ({
+      clave: grupo.id ?? "sin-nombre",
+      nombre: grupo.nombre,
+      centavos: grupo.centavos,
+      parte: grupo.parte,
+      color: PALETA[lugar] ?? COLOR_SIN_NOMBRE,
+    }));
+  if (otras > 0) resultado.push({ clave: "otras", nombre: "Otras", centavos: otras, parte: total ? otras / total : 0, color: COLOR_OTRAS });
+  return resultado;
+}
+
+/**
+ * Lo que salió dentro de una categoría, separado por su aclaración: la persona en una
+ * transferencia, el comercio en un pago, o lo que se haya aclarado al anotar el gasto.
+ * `categoriaId` nulo = los movimientos sin clasificar.
+ */
+export function detalleDeCategoria(confirmadas: Transaccion[], categoriaId: string | null): GrupoDeGasto[] {
+  const grupos = new Map<string, { nombre: string; centavos: number }>();
+  for (const t of confirmadas) {
+    if (ES_ENTRADA[t.tipo] || t.categoriaId !== categoriaId) continue;
+    const nombre = (t.contraparte ?? "").trim();
+    const clave = nombre.toLocaleLowerCase("es-AR");
+    const grupo = grupos.get(clave) ?? { nombre, centavos: 0 };
+    grupo.centavos += t.centavos;
+    grupos.set(clave, grupo);
+  }
+  const total = [...grupos.values()].reduce((suma, g) => suma + g.centavos, 0);
+  return [...grupos]
+    .map(([clave, g]) => ({ id: clave || null, nombre: g.nombre || "Sin aclaración", centavos: g.centavos, parte: total ? g.centavos / total : 0 }))
+    .sort((a, b) => b.centavos - a.centavos);
 }
 
 /** "9 oct": fecha corta para tablas. */
 export function fechaCorta(iso: string): string {
   return `${Number(iso.slice(8, 10))} ${MESES_CORTOS[Number(iso.slice(5, 7)) - 1]}`;
-}
-
-/** Una porción del gráfico circular. El color es de la categoría: no cambia según el período ni el orden. */
-export type Porcion = { clave: string; nombre: string; centavos: number; parte: number; color: string };
-
-// Un color fijo por tipo de operación, en el orden de la paleta (ese orden es el que se validó
-// para que las porciones vecinas se distingan, también con daltonismo).
-const COLORES: [nombre: string, color: string][] = [
-  ["transferencias", "#2a78d6"],
-  ["pagos con tarjeta de debito", "#eb6834"],
-  ["pagos con qr", "#1baf7a"],
-  ["pagos de servicios", "#eda100"],
-  ["pagos con tarjeta de credito", "#e87ba4"],
-  ["impuestos", "#008300"],
-  ["extracciones de efectivo", "#4a3aa7"],
-];
-const COLOR_PROPIO = "#e34948";
-const COLOR_SIN_CLASIFICAR = "#8e8e93";
-const COLOR_OTRAS = "#c7c7cc";
-const PORCIONES_MAXIMAS = 6;
-
-/**
- * Convierte los gastos por categoría en porciones: como mucho seis, en un orden fijo.
- * Lo que no tiene color propio y las categorías más chicas se juntan en "Otras".
- */
-export function porciones(grupos: GrupoDeGasto[]): Porcion[] {
-  const orden = COLORES.map(([nombre]) => nombre);
-  const propias = grupos.filter((g) => g.id !== null && !orden.includes(palabras(g.nombre)));
-  // De las categorías creadas a mano, solo la más grande lleva color; las demás van a "Otras".
-  const propiaConColor = propias[0]?.id;
-
-  const conColor: (Porcion & { lugar: number })[] = [];
-  let otras = 0;
-  for (const grupo of grupos) {
-    const lugar = orden.indexOf(palabras(grupo.nombre));
-    const base = { clave: grupo.id ?? "sin-clasificar", nombre: grupo.nombre, centavos: grupo.centavos, parte: grupo.parte };
-    if (grupo.id === null) conColor.push({ ...base, color: COLOR_SIN_CLASIFICAR, lugar: orden.length + 1 });
-    else if (lugar >= 0) conColor.push({ ...base, color: COLORES[lugar][1], lugar });
-    else if (grupo.id === propiaConColor) conColor.push({ ...base, color: COLOR_PROPIO, lugar: orden.length });
-    else otras += grupo.centavos;
-  }
-
-  // Si igual son demasiadas, las más chicas también se juntan.
-  const porTamanio = [...conColor].sort((a, b) => b.centavos - a.centavos);
-  const cupo = otras > 0 || porTamanio.length > PORCIONES_MAXIMAS ? PORCIONES_MAXIMAS - 1 : PORCIONES_MAXIMAS;
-  const visibles = new Set(porTamanio.slice(0, cupo).map((p) => p.clave));
-  otras += porTamanio.slice(cupo).reduce((suma, p) => suma + p.centavos, 0);
-
-  const total = grupos.reduce((suma, g) => suma + g.centavos, 0);
-  const resultado: Porcion[] = conColor
-    .filter((p) => visibles.has(p.clave))
-    .sort((a, b) => a.lugar - b.lugar)
-    .map(({ clave, nombre, centavos, parte, color }) => ({ clave, nombre, centavos, parte, color }));
-  if (otras > 0) resultado.push({ clave: "otras", nombre: "Otras", centavos: otras, parte: total ? otras / total : 0, color: COLOR_OTRAS });
-  return resultado;
 }

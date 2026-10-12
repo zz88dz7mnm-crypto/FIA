@@ -55,18 +55,18 @@ describe("anotar un movimiento", () => {
   it("lo propone en revisión y recién cuenta al confirmarlo", async () => {
     const { fia, transaccion } = await decir("gasté 4500 en almuerzo");
     expect(fia.texto).toBe("¿Lo anoto así?");
-    expect(transaccion).toMatchObject({ estado: "en_revision", tipo: "gasto", centavos: 450000, categoriaId: null });
+    expect(transaccion).toMatchObject({ estado: "en_revision", tipo: "gasto", centavos: 450000, descripcion: "Almuerzo" });
     expect(await repo.confirmadasEntre("2026-10-01", "2026-10-31")).toHaveLength(0);
 
     const confirmado = await confirmar(sesion, transaccion!.id);
     expect(confirmado.transacciones[0].estado).toBe("confirmada");
-    expect(confirmado.mensajes[0].texto).toBe("Anotado. Este mes ya salieron $4.500.");
+    expect(confirmado.mensajes[0].texto).toBe("Anotado. Llevás $4.500 en Almuerzo este mes.");
   });
 
   it("acumula el total de la categoría en el mes", async () => {
-    await anotar("pagué 4500 con débito en el súper");
-    const segundo = await anotar("cena 12.000 con débito");
-    expect(segundo.mensajes[0].texto).toBe("Anotado. Llevás $16.500 en Pagos con tarjeta de débito este mes.");
+    await anotar("cantina 4500");
+    const segundo = await anotar("cantina 12.000 almuerzo");
+    expect(segundo.mensajes[0].texto).toBe("Anotado. Llevás $16.500 en Cantina este mes.");
   });
 
   it("descartar no deja nada en los totales", async () => {
@@ -131,10 +131,10 @@ describe("preguntas", () => {
     expect(transaccion).toMatchObject({ tipo: "gasto", centavos: 450000, descripcion: "Cosas" });
   });
 
-  it("pregunta el sentido de una transferencia", async () => {
-    expect((await decir("transferencia 20000 Pedro")).fia.texto).toBe("Esa transferencia, ¿la enviaste o la recibiste?");
-    const { transaccion } = await decir("la recibí");
-    expect(transaccion).toMatchObject({ tipo: "transferencia_recibida", centavos: 2000000 });
+  it("con solo decir transferencia la propone como enviada, sin preguntar", async () => {
+    const { fia, transaccion } = await decir("transferencia 20000 Pedro");
+    expect(fia.datos.clase).toBe("propuesta");
+    expect(transaccion).toMatchObject({ tipo: "transferencia_enviada", centavos: 2000000, categoriaId: "transferencias", contraparte: "Pedro" });
   });
 
   it("con dos números, usa el elegido y su descripción", async () => {
@@ -176,8 +176,8 @@ describe("consultas", () => {
         salidas: 12770000,
         porCategoria: [
           { nombre: "Transferencias", centavos: 12000000 },
-          { nombre: "Pagos con tarjeta de débito", centavos: 450000 },
-          { nombre: "Pagos con QR", centavos: 320000 },
+          { nombre: "Almuerzo", centavos: 450000 },
+          { nombre: "Taxi", centavos: 320000 },
         ],
       },
     });
@@ -421,7 +421,73 @@ describe("clasificación manual", () => {
 
   it("editar otra cosa no crea reglas", async () => {
     const { transaccion } = await decir("pagué 4500 con débito en el súper");
-    await editar(sesion, transaccion!.id, { centavos: 500000, categoriaId: "debito" });
+    await editar(sesion, transaccion!.id, { centavos: 500000, categoriaId: transaccion!.categoriaId });
     expect(await repo.reglas()).toEqual([]);
+  });
+});
+
+describe("la categoría es el detalle", () => {
+  const nombreDe = (id: string | null | undefined) => sesion.categorias.find((c) => c.id === id)?.nombre;
+
+  it("crea sola la categoría con el nombre del detalle y la reutiliza", async () => {
+    const primera = await decir("cantina 2000");
+    expect(nombreDe(primera.transaccion?.categoriaId)).toBe("Cantina");
+    expect(primera.transaccion).toMatchObject({ descripcion: "Cantina", contraparte: null });
+
+    const segunda = await decir("cantina 3000 almuerzo");
+    expect(segunda.transaccion).toMatchObject({ categoriaId: primera.transaccion!.categoriaId, descripcion: "Almuerzo", contraparte: "Almuerzo" });
+    expect(sesion.categorias.filter((c) => c.nombre === "Cantina")).toHaveLength(1);
+  });
+
+  it("un detalle que nombra una categoría que ya existe entra en ella", async () => {
+    const primera = await anotar("cantina 2000");
+    const { transaccion } = await decir("gasté 500 en la cantina de la facu");
+    expect(transaccion).toMatchObject({
+      categoriaId: primera.transacciones[0].categoriaId,
+      descripcion: "Cantina de la facu",
+      contraparte: "Cantina de la facu",
+    });
+  });
+
+  it("todas las transferencias van juntas, con la persona como detalle", async () => {
+    const plin = await decir("transferencia plin plin 2000");
+    const plan = await decir("transferí 5000 a Plan Plan, regalo");
+    expect([plin.transaccion, plan.transaccion]).toMatchObject([
+      { categoriaId: "transferencias", contraparte: "Plin plin", descripcion: "Plin plin" },
+      { categoriaId: "transferencias", contraparte: "Plan Plan", descripcion: "Plan Plan · Regalo" },
+    ]);
+    expect(sesion.categorias.some((c) => c.nombre.startsWith("Pl"))).toBe(false);
+  });
+
+  it("un ingreso va a Ingresos, con su detalle adentro", async () => {
+    const { transaccion } = await decir("cobré 250 lucas de sueldo");
+    expect(transaccion).toMatchObject({ categoriaId: "ingresos", contraparte: "Sueldo" });
+  });
+
+  it("descartar borra la categoría que quedó vacía, pero no una que se usa", async () => {
+    const descartada = await decir("kiosco 900");
+    await descartar(sesion, descartada.transaccion!.id);
+    expect(sesion.categorias.some((c) => c.nombre === "Kiosco")).toBe(false);
+    expect((await repo.categorias()).some((c) => c.nombre === "Kiosco")).toBe(false);
+
+    await anotar("cantina 2000");
+    const otra = await decir("cantina 100");
+    await descartar(sesion, otra.transaccion!.id);
+    expect(sesion.categorias.some((c) => c.nombre === "Cantina")).toBe(true);
+  });
+
+  it("sin detalle, usa el medio de pago si lo dijiste", async () => {
+    const { transaccion } = await decir("pagué 2000 con débito");
+    expect(transaccion).toMatchObject({ categoriaId: "debito" });
+  });
+
+  it("pasar un gasto a otra categoría limpia la anterior y enseña la regla", async () => {
+    await anotar("comida 100");
+    const { transaccion } = await decir("almuerzo 6200");
+    const comida = sesion.categorias.find((c) => c.nombre === "Comida")!;
+    await editar(sesion, transaccion!.id, { categoriaId: comida.id });
+    expect(sesion.categorias.some((c) => c.nombre === "Almuerzo")).toBe(false);
+    const proximo = await decir("almuerzo 5000");
+    expect(proximo.transaccion).toMatchObject({ categoriaId: comida.id, contraparte: "Almuerzo" });
   });
 });

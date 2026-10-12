@@ -27,9 +27,19 @@ export function repositorioEnMemoria(): Repositorio {
       return [...CATEGORIAS_DE_MUESTRA, ...categoriasPropias];
     },
     async crearCategoria(nombre, clase) {
-      const categoria: Categoria = { id: nuevoId("c") + categoriasPropias.length, nombre, clase, palabrasClave: [] };
+      const categoria: Categoria = { id: nuevoId("c") + categoriasPropias.length, nombre, clase, palabrasClave: [], propia: true };
       categoriasPropias.push(categoria);
       return { ...categoria };
+    },
+    async categoriaEnUso(id) {
+      return transacciones.some((t) => t.categoriaId === id && t.estado !== "rechazada");
+    },
+    async borrarCategoria(id) {
+      categoriasPropias.splice(0, categoriasPropias.length, ...categoriasPropias.filter((c) => c.id !== id));
+      reglas.splice(0, reglas.length, ...reglas.filter((r) => r.categoriaId !== id));
+      transacciones.forEach((t) => {
+        if (t.categoriaId === id) t.categoriaId = null;
+      });
     },
     async reglas() {
       return reglas.map((r) => ({ ...r }));

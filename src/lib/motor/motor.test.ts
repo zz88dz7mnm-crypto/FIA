@@ -117,20 +117,16 @@ describe("categorías", () => {
 });
 
 describe("interpretar: formato con punto y coma", () => {
-  it("gasto; 4500; débito; almuerzo", () => {
-    expect(movimiento("gasto; 4500; débito; almuerzo")).toMatchObject({
+  it("gasto; 4500; cantina; almuerzo", () => {
+    expect(movimiento("gasto; 4500; cantina; almuerzo")).toMatchObject({
       falta: null,
-      borrador: { tipo: "gasto", centavos: 450000, categoriaId: "debito", descripcion: "Almuerzo", fecha: HOY },
+      borrador: { tipo: "gasto", centavos: 450000, descripcion: "Cantina", aclaracion: "Almuerzo", fecha: HOY },
     });
-  });
-
-  it("si el campo de categoría no es una categoría, pasa a la descripción", () => {
-    expect(movimiento("gasto; 4500; comida; almuerzo").borrador).toMatchObject({ categoriaId: null, descripcion: "Comida almuerzo" });
   });
 
   it("ingreso; 250000; trabajo; sueldo", () => {
     expect(movimiento("ingreso; 250000; trabajo; sueldo").borrador).toMatchObject({
-      tipo: "ingreso", centavos: 25000000, categoriaId: "ingresos", descripcion: "Sueldo",
+      tipo: "ingreso", centavos: 25000000, categoriaId: "ingresos", descripcion: "Trabajo", aclaracion: "Sueldo",
     });
   });
 
@@ -184,10 +180,25 @@ describe("interpretar: escritura libre", () => {
     expect(movimiento("4500 cosas")).toMatchObject({ falta: null, borrador: { tipo: "gasto", centavos: 450000, descripcion: "Cosas" } });
   });
 
-  it("una transferencia sin sentido claro pregunta si fue enviada o recibida", () => {
-    const r = movimiento("transferencia 20000 Pedro");
-    expect(r).toMatchObject({ falta: "tipo", opcionesTipo: ["transferencia_enviada", "transferencia_recibida"] });
-    expect(r.borrador.descripcion).toBe("Pedro");
+  it("con solo decir transferencia, la toma como enviada", () => {
+    expect(movimiento("transferencia 20000 Pedro")).toMatchObject({
+      falta: null,
+      borrador: { tipo: "transferencia_enviada", centavos: 2000000, descripcion: "Pedro" },
+    });
+    expect(movimiento("transferencia plin plin 2000").borrador).toMatchObject({ tipo: "transferencia_enviada", descripcion: "Plin plin" });
+  });
+
+  it.each<[string, string, string]>([
+    ["cantina 2000", "Cantina", ""],
+    ["cantina 2000 almuerzo", "Cantina", "Almuerzo"],
+    ["gasté 2000 en la cantina, almuerzo con Pedro", "Cantina", "Almuerzo con Pedro"],
+    ["cantina 2000 (almuerzo)", "Cantina", "Almuerzo"],
+    ["cantina - almuerzo 2000", "Cantina", "Almuerzo"],
+    ["taxi 3200 al aeropuerto", "Taxi", "Aeropuerto"],
+    ["transferí 12000 a Juan, alquiler", "Juan", "Alquiler"],
+    ["2000 cantina", "Cantina", ""],
+  ])("separa el detalle de la aclaración: %s", (texto, descripcion, aclaracion) => {
+    expect(movimiento(texto).borrador).toMatchObject({ descripcion, aclaracion });
   });
 
   it("sin importe, lo pide", () => {
@@ -199,8 +210,8 @@ describe("interpretar: escritura libre", () => {
     const r = movimiento("2 cafés 4500");
     expect(r.falta).toBe("importe");
     expect(r.opcionesImporte).toEqual([
-      { centavos: 200, descripcion: "Cafés 4500" },
-      { centavos: 450000, descripcion: "2 cafés" },
+      { centavos: 200, descripcion: "Cafés 4500", aclaracion: "" },
+      { centavos: 450000, descripcion: "2 cafés", aclaracion: "" },
     ]);
   });
 
@@ -229,7 +240,7 @@ describe("interpretar: consultas y comandos", () => {
 });
 
 describe("completar una pregunta", () => {
-  const base = { tipo: null, centavos: null, categoriaId: null, descripcion: "Cosas", fecha: HOY, importeDudoso: false, frascoId: null };
+  const base = { tipo: null, centavos: null, categoriaId: null, descripcion: "Cosas", aclaracion: "", fecha: HOY, importeDudoso: false, frascoId: null };
 
   it("toma el importe si la respuesta es solo eso", () => {
     expect(completar(base, "importe", "fueron 4.500")?.centavos).toBe(450000);
