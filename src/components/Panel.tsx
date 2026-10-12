@@ -457,13 +457,16 @@ function Circular({ grupos, total }: { grupos: GrupoDeGasto[]; total: number }) 
                 onFocus={() => setActiva(parte.clave)}
                 onBlur={() => setActiva(null)}
                 onClick={alTocar(parte.clave)}
-                className={`flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left text-[15px] transition-colors ${
+                className={`flex w-full items-start gap-2.5 rounded-xl px-2 py-2 text-left text-[15px] transition-colors ${
                   activa === parte.clave ? "bg-black/5" : ""
                 }`}
               >
-                <span aria-hidden="true" className="size-3 shrink-0 rounded-[4px]" style={{ background: parte.color }} />
-                <span className="min-w-0 flex-1 truncate">{parte.nombre}</span>
-                <span className="cifras w-9 shrink-0 text-right text-[13px] text-tinta-suave">{porcentaje(parte.parte)}</span>
+                <span aria-hidden="true" className="mt-[5px] size-3 shrink-0 rounded-[4px]" style={{ background: parte.color }} />
+                {/* El nombre entero, en dos renglones si hace falta: cortado, "débito" y "crédito" se verían iguales. */}
+                <span className="min-w-0 flex-1">
+                  <span className="block leading-snug">{parte.nombre}</span>
+                  <span className="cifras block text-[12px] leading-snug text-tinta-suave">{porcentaje(parte.parte)} de lo que salió</span>
+                </span>
                 <span className="cifras shrink-0 font-medium">{formatearImporte(parte.centavos)}</span>
               </button>
             </li>
