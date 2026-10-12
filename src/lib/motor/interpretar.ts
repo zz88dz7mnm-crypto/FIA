@@ -13,7 +13,12 @@ export type Borrador = {
   descripcion: string;
   fecha: string;
   importeDudoso: boolean;
+  /** Frasco del que se descuenta el gasto, si el mensaje nombra uno. */
+  frascoId: string | null;
 };
+
+/** Un frasco, tal como lo necesita el motor para reconocerlo por su nombre. */
+export type FrascoConocido = { id: string; nombre: string };
 
 export type OpcionImporte = { centavos: number; descripcion: string };
 
@@ -29,6 +34,10 @@ export type Intencion =
   | { clase: "resumen"; periodo: Periodo }
   | { clase: "gastos_categoria"; periodo: Periodo; categoriaId: string }
   | { clase: "categoria_desconocida"; buscada: string }
+  | { clase: "frascos" }
+  /** Poner o sacar plata de un frasco (lo crea si no existe). `centavos` negativo = sacar; null = sin importe. */
+  | { clase: "frasco_asignar"; nombre: string; frascoId: string | null; centavos: number | null }
+  | { clase: "frasco_borrar"; nombre: string; frascoId: string | null }
   | { clase: "ultimos" }
   | { clase: "deshacer" }
   | { clase: "ayuda" }
@@ -36,7 +45,7 @@ export type Intencion =
   | { clase: "gracias" }
   | { clase: "desconocido" };
 
-export type Contexto = { hoy: string; categorias: Categoria[]; reglas: ReglaPersonal[] };
+export type Contexto = { hoy: string; categorias: Categoria[]; reglas: ReglaPersonal[]; frascos: FrascoConocido[] };
 
 // Verbos y frases admitidos para cada tipo. Se prueban de la más larga a la más corta.
 const FRASES_DE_TIPO: [string, Tipo][] = (
@@ -98,7 +107,11 @@ const SOLO_RELLENO = /^(en|de|del|por|para|a|al|el|la|los|las|un|una|pesos|con|y
 const BORDES = /^[\s,.;:¿?¡!\-–]+|[\s,.;:¿?¡!\-–]+$/g;
 
 function limpiarDescripcion(texto: string): string {
-  let t = texto.replace(/\$/g, " ").replace(/\s+/g, " ").replace(BORDES, "");
+  let t = texto
+    .replace(/\$/g, " ")
+    .replace(/\b(del|de|en el|con el|al|el)?\s*frasco\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .replace(BORDES, "");
   for (let anterior = ""; anterior !== t; ) {
     anterior = t;
     t = t.replace(RELLENO_INICIO, "").replace(RELLENO_FIN, "").replace(BORDES, "");
@@ -106,14 +119,62 @@ function limpiarDescripcion(texto: string): string {
   return SOLO_RELLENO.test(t) ? "" : capitalizar(t);
 }
 
+/** El frasco cuyo nombre aparece en el texto como palabras enteras; si hay varios, el de nombre más largo. */
+export function buscarFrasco(texto: string, frascos: FrascoConocido[]): FrascoConocido | null {
+  const buscable = ` ${palabras(texto)} `;
+  const hallados = frascos.filter((f) => palabras(f.nombre) && buscable.includes(` ${palabras(f.nombre)} `));
+  return hallados.sort((a, b) => b.nombre.length - a.nombre.length)[0] ?? null;
+}
+
+// Palabras que rodean al nombre de un frasco en una orden y no forman parte de él.
+const RELLENO_DE_FRASCO = new Set(
+  `frasco frascos yo le crea crear creame arma armar armame abri abrir nuevo nueva pone poner ponele mete meter metele
+   suma sumar sumale agrega agregar agregale carga cargar cargale asigno asigna asignar asignale designo designa designar
+   destino destina destinar destinale separo separa separar aparto aparta apartar saca sacar sacale saque quita quitar
+   quitale resta restar restale retira retirar retiro borra borrar borrame elimina eliminar cerra cerrar
+   en el la los las al a de del para con pesos un una mi mis gastos gasto cosas plata`.split(/\s+/),
+);
+const SACAR_DE_FRASCO = /\b(saca|sacar|sacale|saque|quita|quitar|quitale|resta|restar|restale|retira|retirar|retiro)\b/;
+const BORRAR_FRASCO = /^(borra|borrar|borrame|elimina|eliminar|cerra|cerrar)\b/;
+const ASIGNAR = /^(yo )?(asigno|asigna|asignale|designo|designa|destino|destina|destinale|separo|separa|aparto|aparta)\b/;
+
+/** El nombre del frasco dentro de una orden: lo que queda al sacar el relleno de las puntas. */
+function nombreDeFrasco(texto: string): string {
+  const piezas = texto.replace(/[$.,;:¿?¡!"«»]/g, " ").split(/\s+/).filter(Boolean);
+  const esRelleno = (pieza: string) => RELLENO_DE_FRASCO.has(plano(pieza));
+  while (piezas.length && esRelleno(piezas[0])) piezas.shift();
+  while (piezas.length && esRelleno(piezas.at(-1)!)) piezas.pop();
+  return capitalizar(piezas.join(" "));
+}
+
+/** Órdenes sobre frascos: "frasco facu 20000", "sacá 5000 del frasco facu", "borrá el frasco facu". */
+function interpretarFrasco(texto: string, limpio: string, importes: ReturnType<typeof buscarImportes>, ctx: Contexto): Intencion | null {
+  const nombre = nombreDeFrasco(importes.length ? quitarTramos(texto, [importes[0]]) : texto);
+  const existente = ctx.frascos.find((f) => palabras(f.nombre) === palabras(nombre)) ?? null;
+
+  if (BORRAR_FRASCO.test(limpio) && !importes.length) {
+    return { clase: "frasco_borrar", nombre, frascoId: existente?.id ?? null };
+  }
+  // "apuntes 3000 frasco facu": nombra un frasco que ya existe y agrega algo más → es un gasto de ese frasco.
+  if (!existente && importes.length && buscarFrasco(nombre, ctx.frascos)) return null;
+
+  const centavos = importes[0]?.centavos ?? null;
+  return {
+    clase: "frasco_asignar",
+    nombre: existente?.nombre ?? nombre,
+    frascoId: existente?.id ?? null,
+    centavos: centavos !== null && SACAR_DE_FRASCO.test(limpio) ? -centavos : centavos,
+  };
+}
+
 /** La única categoría de ingresos, si hay exactamente una. */
-function categoriaDeIngresos(categorias: Categoria[]): Categoria | null {
+export function categoriaDeIngresos(categorias: Categoria[]): Categoria | null {
   const ingresos = categorias.filter((c) => c.clase === "ingreso");
   return ingresos.length === 1 ? ingresos[0] : null;
 }
 
 function armarMovimiento(
-  partes: { tipo: Tipo | null; transferenciaSinSentido: boolean; fecha: string },
+  partes: { tipo: Tipo | null; transferenciaSinSentido: boolean; fecha: string; frascoId: string | null },
   importes: { centavos: number; dudoso: boolean; descripcion: string }[],
   descripcionBase: string,
   textoCategoria: string,
@@ -138,6 +199,7 @@ function armarMovimiento(
       descripcion,
       fecha: partes.fecha,
       importeDudoso: unico?.dudoso ?? false,
+      frascoId: tipo === "ingreso" || tipo === "transferencia_recibida" ? null : partes.frascoId,
     },
     falta: !unico ? "importe" : !tipo ? "tipo" : null,
     opcionesImporte: importes.length > 1 ? importes.map(({ centavos, descripcion: d }) => ({ centavos, descripcion: d })) : [],
@@ -166,7 +228,7 @@ function interpretarFormal(campos: string[], ctx: Contexto): Intencion | null {
   const descripcion = limpiarDescripcion(sinFecha.length > 1 ? sinFecha.slice(1).join(" ") : (sinFecha[0] ?? ""));
 
   return armarMovimiento(
-    { tipo: tipo.tipo, transferenciaSinSentido: false, fecha: fecha?.fecha ?? ctx.hoy },
+    { tipo: tipo.tipo, transferenciaSinSentido: false, fecha: fecha?.fecha ?? ctx.hoy, frascoId: buscarFrasco(campos.join(" "), ctx.frascos)?.id ?? null },
     hallados.slice(0, 1).map((i) => ({ centavos: i.centavos, dudoso: i.dudoso, descripcion })),
     descripcion,
     sinFecha.join(" "),
@@ -216,8 +278,15 @@ export function interpretar(mensaje: string, ctx: Contexto): Intencion {
       : { clase: "resumen", periodo: buscarPeriodo(p) };
   }
 
-  // ── Movimientos ──
+  // ── Frascos ──
   const tipo = buscarTipo(sinFecha);
+  if (/^(mis |ver |los )?frascos$|^como (estan|vienen|van) (los |mis )?frascos$/.test(limpio)) return { clase: "frascos" };
+  if (!tipo && (/\bfrascos?\b/.test(p) || ASIGNAR.test(limpio))) {
+    const orden = interpretarFrasco(texto, limpio, importes, ctx);
+    if (orden) return orden;
+  }
+
+  // ── Movimientos ──
   const transferenciaSinSentido = !tipo && /\btransferencias?\b/.test(p);
   const fijos: Tramo[] = [tipo, fecha].filter((t): t is NonNullable<typeof t> => t !== null);
   const describir = (extra: Tramo[]) =>
@@ -230,7 +299,7 @@ export function interpretar(mensaje: string, ctx: Contexto): Intencion {
   if (!importes.length && !tipo && !transferenciaSinSentido && !hayCategoria) return { clase: "desconocido" };
 
   return armarMovimiento(
-    { tipo: tipo?.tipo ?? null, transferenciaSinSentido, fecha: fecha?.fecha ?? ctx.hoy },
+    { tipo: tipo?.tipo ?? null, transferenciaSinSentido, fecha: fecha?.fecha ?? ctx.hoy, frascoId: buscarFrasco(texto, ctx.frascos)?.id ?? null },
     candidatos,
     descripcionBase,
     "",

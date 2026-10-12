@@ -31,7 +31,7 @@ export function Ingreso() {
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center px-6 py-10">
-      <Fia animo={error ? "duda" : entrando ? "pensando" : "tranqui"} className="animate-flotar h-28 w-auto self-start" />
+      <Fia className="size-16 self-start" />
       <h1 className="mt-6 font-display text-[2.6rem] leading-[1.02] font-extrabold tracking-tight">
         Hola, soy Fia.
       </h1>

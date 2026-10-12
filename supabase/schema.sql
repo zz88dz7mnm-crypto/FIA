@@ -76,6 +76,30 @@ create table if not exists public.transacciones (
 create index if not exists transacciones_usuario_fecha on public.transacciones (usuario_id, fecha desc);
 create index if not exists transacciones_duplicados on public.transacciones (usuario_id, fecha, importe);
 
+-- ───────────────────────── Frascos ────────────────────────
+-- Plata apartada para algo. Lo que queda = lo que se le puso − los gastos anotados en ese frasco.
+create table if not exists public.frascos (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  nombre text not null,
+  creado_en timestamptz not null default now()
+);
+
+create unique index if not exists frascos_nombre_unico on public.frascos (usuario_id, lower(nombre));
+
+create table if not exists public.aportes_frasco (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  frasco_id uuid not null references public.frascos (id) on delete cascade,
+  importe numeric(14, 2) not null check (importe <> 0),
+  creado_en timestamptz not null default now()
+);
+
+alter table public.transacciones
+  add column if not exists frasco_id uuid references public.frascos (id) on delete set null;
+
+create index if not exists transacciones_frasco on public.transacciones (frasco_id) where frasco_id is not null;
+
 -- ─────────────────── Presupuestos y metas ─────────────────
 create table if not exists public.presupuestos (
   id uuid primary key default gen_random_uuid(),
@@ -186,6 +210,8 @@ alter table public.presupuestos enable row level security;
 alter table public.metas enable row level security;
 alter table public.aportes_meta enable row level security;
 alter table public.auditoria enable row level security;
+alter table public.frascos enable row level security;
+alter table public.aportes_frasco enable row level security;
 
 drop policy if exists perfiles_propio on public.perfiles;
 create policy perfiles_propio on public.perfiles for all to authenticated
@@ -231,18 +257,27 @@ drop policy if exists aportes_propio on public.aportes_meta;
 create policy aportes_propio on public.aportes_meta for all to authenticated
   using (usuario_id = (select auth.uid())) with check (usuario_id = (select auth.uid()));
 
+drop policy if exists frascos_propio on public.frascos;
+create policy frascos_propio on public.frascos for all to authenticated
+  using (usuario_id = (select auth.uid())) with check (usuario_id = (select auth.uid()));
+
+drop policy if exists aportes_frasco_propio on public.aportes_frasco;
+create policy aportes_frasco_propio on public.aportes_frasco for all to authenticated
+  using (usuario_id = (select auth.uid())) with check (usuario_id = (select auth.uid()));
+
 drop policy if exists auditoria_ver on public.auditoria;
 create policy auditoria_ver on public.auditoria for select to authenticated
   using (usuario_id = (select auth.uid()));
 
 -- Permisos: sin sesión no se accede a nada. Los movimientos no se borran, se anulan.
 revoke all on public.perfiles, public.categorias, public.reglas_categoria, public.mensajes,
-  public.transacciones, public.presupuestos, public.metas, public.aportes_meta, public.auditoria
+  public.transacciones, public.presupuestos, public.metas, public.aportes_meta, public.auditoria,
+  public.frascos, public.aportes_frasco
   from anon, authenticated;
 
 grant select, insert, update on public.perfiles to authenticated;
 grant select, insert, update, delete on public.categorias, public.reglas_categoria,
-  public.presupuestos, public.metas, public.aportes_meta to authenticated;
+  public.presupuestos, public.metas, public.aportes_meta, public.frascos, public.aportes_frasco to authenticated;
 grant select, insert on public.mensajes to authenticated;
 grant select, insert, update on public.transacciones to authenticated;
 grant select on public.auditoria to authenticated;

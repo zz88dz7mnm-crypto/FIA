@@ -1,9 +1,10 @@
 import type { Repositorio, CambiosTransaccion } from "../datos/repositorio";
-import type { Categoria, ReglaPersonal } from "../motor/categorias";
+import { extraerOperaciones } from "../motor/capturas";
+import { clasificar, type Categoria, type ReglaPersonal } from "../motor/categorias";
 import { rangoDe, type Periodo } from "../motor/fechas";
-import { completar, interpretar, type Borrador, type Intencion, type Tipo } from "../motor/interpretar";
+import { buscarFrasco, categoriaDeIngresos, completar, interpretar, type Borrador, type Contexto, type Intencion, type Tipo } from "../motor/interpretar";
 import { capitalizar, palabras } from "../motor/texto";
-import { ES_ENTRADA, type DatosMensaje, type Mensaje, type Perfil, type Resumen, type Transaccion } from "../tipos";
+import { ES_ENTRADA, type Aviso, type DatosMensaje, type EstadoFrasco, type Mensaje, type Perfil, type Resumen, type Transaccion } from "../tipos";
 import { voz } from "./voz";
 
 export type Sesion = {
@@ -11,6 +12,7 @@ export type Sesion = {
   perfil: Perfil;
   categorias: Categoria[];
   reglas: ReglaPersonal[];
+  frascos: EstadoFrasco[];
   /** Fecha de hoy ("AAAA-MM-DD") en la zona horaria del usuario. */
   hoy: () => string;
 };
@@ -28,19 +30,28 @@ export function hoyEn(zonaHoraria: string): string {
 
 function idsEnMensajes(mensajes: Mensaje[]): string[] {
   return mensajes.flatMap((m) =>
-    m.datos.clase === "propuesta" ? [m.datos.transaccionId] : m.datos.clase === "lista" ? m.datos.transaccionIds : [],
+    m.datos.clase === "propuesta"
+      ? [m.datos.transaccionId]
+      : m.datos.clase === "lista" || m.datos.clase === "lote"
+        ? m.datos.transaccionIds
+        : [],
   );
+}
+
+function contexto(sesion: Sesion): Contexto {
+  return { hoy: sesion.hoy(), categorias: sesion.categorias, reglas: sesion.reglas, frascos: sesion.frascos };
 }
 
 /** Carga todo lo necesario para conversar. La primera vez, Fia se presenta. */
 export async function abrir(repo: Repositorio): Promise<{ sesion: Sesion; mensajes: Mensaje[]; transacciones: Transaccion[] }> {
-  const [perfil, categorias, reglas, previos] = await Promise.all([
+  const [perfil, categorias, reglas, frascos, previos] = await Promise.all([
     repo.perfil(),
     repo.categorias(),
     repo.reglas(),
+    repo.frascos(),
     repo.mensajes(MENSAJES_A_CARGAR),
   ]);
-  const sesion: Sesion = { repo, perfil, categorias, reglas, hoy: () => hoyEn(perfil.zonaHoraria) };
+  const sesion: Sesion = { repo, perfil, categorias, reglas, frascos, hoy: () => hoyEn(perfil.zonaHoraria) };
 
   const mensajes = previos.length
     ? previos
@@ -64,8 +75,7 @@ function leerNombre(texto: string, sesion: Sesion): string | null {
     .trim();
   const pareceNombre = limpio.length > 0 && limpio.length <= 30 && !/\d/.test(limpio) && limpio.split(/\s+/).length <= 3;
   if (!pareceNombre) return null;
-  const leido = interpretar(texto, { hoy: sesion.hoy(), categorias: sesion.categorias, reglas: sesion.reglas });
-  return leido.clase === "desconocido" ? capitalizar(limpio) : null;
+  return interpretar(texto, contexto(sesion)).clase === "desconocido" ? capitalizar(limpio) : null;
 }
 
 function nombreDeCategoria(sesion: Sesion, id: string | null): string | null {
@@ -103,6 +113,7 @@ async function proponer(sesion: Sesion, borrador: Borrador & { tipo: Tipo; centa
     fecha: borrador.fecha,
     descripcion: borrador.descripcion,
     categoriaId: borrador.categoriaId,
+    frascoId: borrador.frascoId,
     origenMensajeId,
   });
 
@@ -175,7 +186,7 @@ async function responder(sesion: Sesion, texto: string, anterior: Mensaje | null
     }
   }
 
-  const leido = interpretar(texto, { hoy: sesion.hoy(), categorias: sesion.categorias, reglas: sesion.reglas });
+  const leido = interpretar(texto, contexto(sesion));
 
   switch (leido.clase) {
     case "movimiento":
@@ -200,6 +211,38 @@ async function responder(sesion: Sesion, texto: string, anterior: Mensaje | null
 
     case "categoria_desconocida":
       return soloTexto(voz.categoriaDesconocida(leido.buscada));
+
+    case "frascos":
+      await refrescarFrascos(sesion);
+      return sesion.frascos.length
+        ? soloTexto(voz.frascos, { clase: "frascos", frascos: sesion.frascos })
+        : soloTexto(voz.frascosVacio);
+
+    case "frasco_asignar": {
+      if (!leido.nombre) return soloTexto(voz.frascoSinNombre);
+      const { centavos } = leido;
+      if (!leido.frascoId && centavos !== null && centavos < 0) return soloTexto(voz.frascoNoExiste(leido.nombre));
+
+      const id = leido.frascoId ?? (await sesion.repo.crearFrasco(leido.nombre)).id;
+      if (centavos) await sesion.repo.aportarAFrasco(id, centavos);
+      await refrescarFrascos(sesion);
+
+      const texto = !leido.frascoId
+        ? voz.frascoCreado(leido.nombre, centavos)
+        : !centavos
+          ? voz.frascoEstado(leido.nombre)
+          : centavos > 0
+            ? voz.frascoSumado(leido.nombre, centavos)
+            : voz.frascoRestado(leido.nombre, -centavos);
+      return soloTexto(texto, { clase: "frascos", frascos: sesion.frascos.filter((f) => f.id === id) });
+    }
+
+    case "frasco_borrar": {
+      if (!leido.frascoId) return soloTexto(leido.nombre ? voz.frascoNoExiste(leido.nombre) : voz.frascoSinNombre);
+      await sesion.repo.borrarFrasco(leido.frascoId);
+      await refrescarFrascos(sesion);
+      return soloTexto(voz.frascoBorrado(leido.nombre));
+    }
 
     case "ultimos": {
       const ultimas = await sesion.repo.ultimas(5);
@@ -230,6 +273,8 @@ async function responder(sesion: Sesion, texto: string, anterior: Mensaje | null
 async function fraseDeAnotado(sesion: Sesion, t: Transaccion): Promise<string> {
   const hoy = sesion.hoy();
   const mes = rangoDe("mes", hoy);
+  const frasco = ES_ENTRADA[t.tipo] ? undefined : sesion.frascos.find((f) => f.id === t.frascoId);
+  if (frasco) return voz.anotadoEnFrasco(frasco.nombre, frasco.asignado - frasco.gastado);
   if (t.fecha < mes.desde || t.fecha > mes.hasta) return voz.anotadoConFecha(t.fecha, hoy);
 
   if (t.tipo === "gasto") {
@@ -250,7 +295,71 @@ async function fraseDeAnotado(sesion: Sesion, t: Transaccion): Promise<string> {
 
 async function cambiar(sesion: Sesion, id: string, cambios: CambiosTransaccion, frase: (t: Transaccion) => Promise<string> | string): Promise<Novedad> {
   const transaccion = await sesion.repo.actualizarTransaccion(id, cambios);
+  // Si el movimiento toca un frasco, sus cuentas cambiaron.
+  if (transaccion.frascoId || "frascoId" in cambios) await refrescarFrascos(sesion);
   return { mensajes: [await decir(sesion, await frase(transaccion))], transacciones: [transaccion] };
+}
+
+async function refrescarFrascos(sesion: Sesion): Promise<void> {
+  sesion.frascos = await sesion.repo.frascos();
+}
+
+/**
+ * Procesa el texto leído de una captura: guarda cada operación "en revisión" y las
+ * muestra para confirmar, editar o descartar una por una.
+ */
+export async function recibirCaptura(sesion: Sesion, textoLeido: string): Promise<Novedad & { propio: Mensaje }> {
+  const propio = await sesion.repo.agregarMensaje({ autor: "usuario", texto: "", datos: { clase: "captura" }, textoExtraido: textoLeido });
+  const hoy = sesion.hoy();
+  const operaciones = extraerOperaciones(textoLeido, { hoy, nombre: sesion.perfil.nombre });
+  if (!operaciones.length) return { propio, mensajes: [await decir(sesion, voz.capturaVacia)], transacciones: [] };
+
+  const transacciones: Transaccion[] = [];
+  const avisos: Record<string, Aviso[]> = {};
+  for (const operacion of operaciones) {
+    // Sin sentido claro se guarda como enviada, pero el ticket obliga a elegir antes de anotar.
+    const tipo = operacion.tipo ?? "transferencia_enviada";
+    const fecha = operacion.fecha ?? hoy;
+    const categoria =
+      clasificar(operacion.descripcion, sesion.categorias, sesion.reglas) ??
+      (tipo === "ingreso" ? categoriaDeIngresos(sesion.categorias) : null);
+    const detalle = palabras(operacion.descripcion);
+    const repetidas = (await sesion.repo.parecidas({ tipo, centavos: operacion.centavos, fecha })).filter((otra) =>
+      operacion.referencia && otra.referencia ? otra.referencia === operacion.referencia : palabras(otra.descripcion) === detalle,
+    );
+
+    const transaccion = await sesion.repo.crearTransaccion({
+      tipo,
+      centavos: operacion.centavos,
+      fecha,
+      descripcion: operacion.descripcion,
+      categoriaId: categoria?.id ?? null,
+      frascoId: ES_ENTRADA[tipo] ? null : (buscarFrasco(operacion.descripcion, sesion.frascos)?.id ?? null),
+      origenMensajeId: propio.id,
+      metodo: "imagen",
+      contraparte: operacion.contraparte,
+      referencia: operacion.referencia,
+    });
+    transacciones.push(transaccion);
+    avisos[transaccion.id] = [
+      ...(operacion.tipo ? [] : (["sentido"] as const)),
+      ...(operacion.importeDudoso ? (["importe_dudoso"] as const) : []),
+      ...(operacion.fecha ? [] : (["sin_fecha"] as const)),
+      ...(repetidas.length ? (["duplicado"] as const) : []),
+    ];
+  }
+
+  const texto = transacciones.length === 1 ? voz.capturaUna : voz.capturaVarias(transacciones.length);
+  const mensaje = await decir(sesion, texto, { clase: "lote", transaccionIds: transacciones.map((t) => t.id), avisos });
+  return { propio, mensajes: [mensaje], transacciones };
+}
+
+/** Confirma varios movimientos de una captura de una sola vez. */
+export async function confirmarVarios(sesion: Sesion, ids: string[]): Promise<Novedad> {
+  const transacciones: Transaccion[] = [];
+  for (const id of ids) transacciones.push(await sesion.repo.actualizarTransaccion(id, { estado: "confirmada" }));
+  if (transacciones.some((t) => t.frascoId)) await refrescarFrascos(sesion);
+  return { mensajes: [await decir(sesion, voz.anotadosVarios(transacciones.length))], transacciones };
 }
 
 /** El usuario aprueba un movimiento: recién ahí cuenta en los totales. */

@@ -5,9 +5,9 @@ import type { CambiosTransaccion } from "@/lib/datos/repositorio";
 import type { Categoria } from "@/lib/motor/categorias";
 import { describirFecha } from "@/lib/motor/fechas";
 import { buscarImportes, formatearImporte } from "@/lib/motor/importes";
-import type { Tipo } from "@/lib/motor/interpretar";
+import type { FrascoConocido, Tipo } from "@/lib/motor/interpretar";
 import { plano } from "@/lib/motor/texto";
-import { ES_ENTRADA, NOMBRE_DE_TIPO, type Transaccion } from "@/lib/tipos";
+import { ES_ENTRADA, NOMBRE_DE_TIPO, type Aviso, type Transaccion } from "@/lib/tipos";
 
 export type AccionesDeTicket = {
   confirmar: (id: string) => void;
@@ -19,14 +19,22 @@ export type AccionesDeTicket = {
 type Props = {
   transaccion: Transaccion;
   categorias: Categoria[];
+  frascos: FrascoConocido[];
   hoy: string;
-  aviso?: "duplicado" | "importe_dudoso";
+  avisos?: Aviso[];
   ocupado: boolean;
   animar: boolean;
   acciones: AccionesDeTicket;
 };
 
 const TIPOS = Object.keys(NOMBRE_DE_TIPO) as Tipo[];
+
+const TEXTO_DE_AVISO: Record<Aviso, string> = {
+  sentido: "Decime si la enviaste o la recibiste",
+  importe_dudoso: "Revisá el importe",
+  sin_fecha: "No vi la fecha: le puse hoy",
+  duplicado: "Parece repetido",
+};
 
 export function Sello({ texto, tono }: { texto: string; tono: "birome" | "rojo" }) {
   return (
@@ -40,8 +48,8 @@ export function Sello({ texto, tono }: { texto: string; tono: "birome" | "rojo" 
   );
 }
 
-export function Importe({ transaccion, className = "" }: { transaccion: Transaccion; className?: string }) {
-  const entra = ES_ENTRADA[transaccion.tipo];
+export function Importe({ transaccion, neutro = false, className = "" }: { transaccion: Transaccion; neutro?: boolean; className?: string }) {
+  const entra = ES_ENTRADA[transaccion.tipo] && !neutro;
   return (
     <span className={`font-mono font-medium tabular-nums ${entra ? "text-verde" : "text-tinta"} ${className}`}>
       {entra ? "+" : ""}
@@ -51,10 +59,14 @@ export function Importe({ transaccion, className = "" }: { transaccion: Transacc
 }
 
 /** Un movimiento, dibujado como el ticket que Fia te alcanza para revisar. */
-export function Ticket({ transaccion: t, categorias, hoy, aviso, ocupado, animar, acciones }: Props) {
+export function Ticket({ transaccion: t, categorias, frascos, hoy, avisos = [], ocupado, animar, acciones }: Props) {
   const [editando, setEditando] = useState(false);
   const categoria = categorias.find((c) => c.id === t.categoriaId)?.nombre;
+  const frasco = frascos.find((f) => f.id === t.frascoId)?.nombre;
   const apagado = t.estado === "rechazada" || t.estado === "anulada";
+  const pendiente = t.estado === "en_revision";
+  // Mientras no se sepa si la plata entró o salió, no se muestra como ninguna de las dos.
+  const faltaSentido = pendiente && avisos.includes("sentido");
 
   return (
     <div className={`sombra-ticket w-full max-w-[19rem] ${animar ? "animate-imprimir" : ""}`}>
@@ -66,6 +78,7 @@ export function Ticket({ transaccion: t, categorias, hoy, aviso, ocupado, animar
           <Formulario
             transaccion={t}
             categorias={categorias}
+            frascos={frascos}
             hoy={hoy}
             ocupado={ocupado}
             alCancelar={() => setEditando(false)}
@@ -77,48 +90,57 @@ export function Ticket({ transaccion: t, categorias, hoy, aviso, ocupado, animar
         ) : (
           <>
             <p className="font-mono text-[11px] font-medium tracking-[0.12em] text-tinta-suave uppercase">
-              {NOMBRE_DE_TIPO[t.tipo]} · {describirFecha(t.fecha, hoy)}
+              {faltaSentido ? "Transferencia" : NOMBRE_DE_TIPO[t.tipo]} · {describirFecha(t.fecha, hoy)}
             </p>
             <p className="mt-1.5">
-              <Importe transaccion={t} className={`text-[2rem] leading-none ${t.estado === "anulada" ? "line-through" : ""}`} />
+              <Importe
+                transaccion={t}
+                neutro={faltaSentido}
+                className={`text-[2rem] leading-none ${t.estado === "anulada" ? "line-through" : ""}`}
+              />
             </p>
             <p className="mt-2.5 text-[15px] leading-snug font-medium break-words">{t.descripcion || "Sin detalle"}</p>
             <p className={`text-[13px] ${categoria ? "text-tinta-suave" : "text-rojo"}`}>{categoria ?? "Sin clasificar"}</p>
+            {frasco && <p className="text-[13px] font-medium text-birome">Frasco {frasco}</p>}
 
-            {aviso && t.estado === "en_revision" && (
-              <p className="mt-2 border-l-2 border-rojo pl-2 text-[13px] leading-snug text-rojo">
-                {aviso === "duplicado" ? "Parece repetido" : "Revisá el importe"}
-              </p>
+            {pendiente && avisos.length > 0 && (
+              <ul className="mt-2 grid gap-0.5 border-l-2 border-rojo pl-2 text-[13px] leading-snug text-rojo">
+                {avisos.map((aviso) => (
+                  <li key={aviso}>{TEXTO_DE_AVISO[aviso]}</li>
+                ))}
+              </ul>
             )}
 
-            <div className="mt-3 flex min-h-11 items-center gap-1 border-t border-dashed border-linea pt-2 text-[14px]">
-              {t.estado === "en_revision" && (
+            <div className="mt-3 flex min-h-11 flex-wrap items-center gap-1 border-t border-dashed border-linea pt-2 text-[14px]">
+              {pendiente && faltaSentido && (
                 <>
-                  <button
-                    type="button"
-                    disabled={ocupado}
-                    onClick={() => acciones.confirmar(t.id)}
-                    className="h-10 rounded-full bg-birome px-5 font-semibold text-white transition-colors active:bg-birome-oscuro disabled:opacity-50"
-                  >
-                    {aviso === "duplicado" ? "Anotar igual" : "Anotar"}
-                  </button>
-                  <BotonDeTexto disabled={ocupado} onClick={() => setEditando(true)}>
-                    Editar
-                  </BotonDeTexto>
-                  <BotonDeTexto disabled={ocupado} onClick={() => acciones.descartar(t.id)}>
-                    Descartar
-                  </BotonDeTexto>
+                  <BotonPrincipal disabled={ocupado} onClick={() => acciones.editar(t.id, { tipo: "transferencia_enviada" }, false)}>
+                    La envié
+                  </BotonPrincipal>
+                  <BotonPrincipal disabled={ocupado} onClick={() => acciones.editar(t.id, { tipo: "transferencia_recibida" }, false)}>
+                    La recibí
+                  </BotonPrincipal>
                 </>
               )}
+              {pendiente && !faltaSentido && (
+                <BotonPrincipal disabled={ocupado} onClick={() => acciones.confirmar(t.id)}>
+                  {avisos.includes("duplicado") ? "Anotar igual" : "Anotar"}
+                </BotonPrincipal>
+              )}
+              {(pendiente || t.estado === "confirmada") && (
+                <BotonDeTexto disabled={ocupado} onClick={() => setEditando(true)}>
+                  Editar
+                </BotonDeTexto>
+              )}
+              {pendiente && (
+                <BotonDeTexto disabled={ocupado} onClick={() => acciones.descartar(t.id)}>
+                  Descartar
+                </BotonDeTexto>
+              )}
               {t.estado === "confirmada" && (
-                <>
-                  <BotonDeTexto disabled={ocupado} onClick={() => setEditando(true)}>
-                    Editar
-                  </BotonDeTexto>
-                  <BotonDeTexto disabled={ocupado} onClick={() => acciones.anular(t.id)}>
-                    Anular
-                  </BotonDeTexto>
-                </>
+                <BotonDeTexto disabled={ocupado} onClick={() => acciones.anular(t.id)}>
+                  Anular
+                </BotonDeTexto>
               )}
               {t.estado === "rechazada" && <span className="px-1 text-tinta-suave">Descartado</span>}
               {t.estado === "anulada" && <span className="px-1 text-tinta-suave">No cuenta en tus totales</span>}
@@ -127,6 +149,16 @@ export function Ticket({ transaccion: t, categorias, hoy, aviso, ocupado, animar
         )}
       </article>
     </div>
+  );
+}
+
+function BotonPrincipal(props: React.ComponentProps<"button">) {
+  return (
+    <button
+      type="button"
+      {...props}
+      className="h-10 rounded-full bg-birome px-5 font-semibold text-white transition-colors active:bg-birome-oscuro disabled:opacity-50"
+    />
   );
 }
 
@@ -146,6 +178,7 @@ const CAMPO =
 function Formulario({
   transaccion: t,
   categorias,
+  frascos,
   hoy,
   ocupado,
   alGuardar,
@@ -153,6 +186,7 @@ function Formulario({
 }: {
   transaccion: Transaccion;
   categorias: Categoria[];
+  frascos: FrascoConocido[];
   hoy: string;
   ocupado: boolean;
   alGuardar: (cambios: Omit<CambiosTransaccion, "estado">) => void;
@@ -162,6 +196,7 @@ function Formulario({
   const [tipo, setTipo] = useState<Tipo>(t.tipo);
   const [importe, setImporte] = useState(formatearImporte(t.centavos).replace("$", ""));
   const [categoriaId, setCategoriaId] = useState(t.categoriaId ?? "");
+  const [frascoId, setFrascoId] = useState(t.frascoId ?? "");
   const [descripcion, setDescripcion] = useState(t.descripcion);
   const [fecha, setFecha] = useState(t.fecha);
   const [error, setError] = useState("");
@@ -177,7 +212,15 @@ function Formulario({
       setError("La fecha no puede ser posterior a hoy");
       return;
     }
-    alGuardar({ tipo, centavos: leidos[0].centavos, categoriaId: categoriaId || null, descripcion: descripcion.trim(), fecha });
+    alGuardar({
+      tipo,
+      centavos: leidos[0].centavos,
+      categoriaId: categoriaId || null,
+      // Un frasco solo descuenta plata que sale.
+      frascoId: ES_ENTRADA[tipo] ? null : frascoId || null,
+      descripcion: descripcion.trim(),
+      fecha,
+    });
   }
 
   return (
@@ -207,6 +250,19 @@ function Formulario({
           ))}
         </select>
       </label>
+      {frascos.length > 0 && !ES_ENTRADA[tipo] && (
+        <label htmlFor={`${id}-frasco`} className="grid gap-1">
+          Frasco
+          <select id={`${id}-frasco`} value={frascoId} onChange={(e) => setFrascoId(e.target.value)} className={CAMPO}>
+            <option value="">Ninguno</option>
+            {frascos.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.nombre}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <div className="grid grid-cols-2 gap-2.5">
         <label htmlFor={`${id}-tipo`} className="grid gap-1">
           Tipo

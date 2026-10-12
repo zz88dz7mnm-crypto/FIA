@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { repositorioEnMemoria } from "../datos/memoria";
 import type { Repositorio } from "../datos/repositorio";
 import type { Mensaje, Transaccion } from "../tipos";
-import { abrir, anular, confirmar, descartar, editar, recibir, type Sesion } from "./conversacion";
+import { abrir, anular, confirmar, confirmarVarios, descartar, editar, recibir, recibirCaptura, type Sesion } from "./conversacion";
 
 const HOY = "2026-10-11";
 
@@ -196,5 +196,110 @@ describe("consultas", () => {
 
   it("un período sin movimientos lo dice claro", async () => {
     expect((await decir("resumen del mes pasado")).fia.texto).toBe("No anoté nada en septiembre.");
+  });
+});
+
+describe("frascos", () => {
+  it("arma un frasco, descuenta los gastos que lo nombran y avisa cuánto queda", async () => {
+    const creado = await decir("yo designo 20000 pesos a gastos de la facu");
+    expect(creado.fia.texto).toContain("Armé el frasco Facu con $20.000");
+    expect(creado.fia.datos).toMatchObject({ clase: "frascos", frascos: [{ nombre: "Facu", asignado: 2000000, gastado: 0 }] });
+
+    const { transaccion } = await decir("gasté 3000 en apuntes de la facu");
+    expect(transaccion?.frascoId).toBe(sesion.frascos[0].id);
+    // En revisión todavía no descuenta.
+    expect((await repo.frascos())[0].gastado).toBe(0);
+
+    const anotado = await confirmar(sesion, transaccion!.id);
+    expect(anotado.mensajes[0].texto).toBe("Anotado. En el frasco Facu te quedan $17.000.");
+  });
+
+  it("avisa cuando te pasás del frasco, y anular devuelve la plata", async () => {
+    await decir("frasco facu 2000");
+    const { transacciones } = await anotar("gasté 3000 en apuntes de la facu");
+    expect((await repo.mensajes(1))[0].texto).toBe("Anotado. Te pasaste $1.000 del frasco Facu.");
+
+    await anular(sesion, transacciones[0].id);
+    expect(sesion.frascos[0]).toMatchObject({ asignado: 200000, gastado: 0 });
+  });
+
+  it("suma, saca y muestra el estado", async () => {
+    await decir("frasco facu 20000");
+    expect((await decir("sumale 5000 al frasco facu")).fia.texto).toBe("Sumé $5.000 al frasco Facu.");
+    expect((await decir("sacá 10000 del frasco facu")).fia.texto).toBe("Saqué $10.000 del frasco Facu.");
+    const estado = await decir("mis frascos");
+    expect(estado.fia.datos).toMatchObject({ clase: "frascos", frascos: [{ nombre: "Facu", asignado: 1500000 }] });
+  });
+
+  it("no saca plata de un frasco que no existe", async () => {
+    expect((await decir("sacá 500 del frasco viaje")).fia.texto).toBe("No tengo un frasco que se llame «Viaje».");
+    expect(await repo.frascos()).toHaveLength(0);
+  });
+
+  it("borrar el frasco deja los gastos anotados", async () => {
+    await decir("frasco facu 20000");
+    const { transacciones } = await anotar("gasté 3000 en apuntes de la facu");
+    expect((await decir("borrá el frasco facu")).fia.texto).toContain("Borré el frasco Facu");
+    expect(await repo.transaccionesPorId([transacciones[0].id])).toMatchObject([{ estado: "confirmada", frascoId: null }]);
+  });
+
+  it("al editar se puede cambiar el frasco", async () => {
+    await decir("frasco facu 20000");
+    const { transaccion } = await decir("gasté 4500 en almuerzo");
+    const editado = await editar(sesion, transaccion!.id, { frascoId: sesion.frascos[0].id });
+    expect(editado.mensajes[0].texto).toBe("Anotado. En el frasco Facu te quedan $15.500.");
+  });
+});
+
+describe("capturas", () => {
+  const LISTADO = [
+    "Actividad",
+    "Hoy",
+    "Transferencia enviada - $ 8.000",
+    "Kiosco El Sol 14:32",
+    "Transferencia recibida + $ 12.500",
+    "Pedro Gomez 11:05",
+    "Pago con QR - $ 3.200",
+    "Cine Gaumont 19:40",
+  ].join("\n");
+
+  it("una captura con tres operaciones produce tres movimientos separados", async () => {
+    const novedad = await recibirCaptura(sesion, LISTADO);
+    expect(novedad.propio.datos.clase).toBe("captura");
+    expect(novedad.mensajes[0].texto).toBe("Encontré 3 movimientos en la captura. Revisalos uno por uno.");
+    expect(novedad.transacciones.map((t) => [t.tipo, t.centavos, t.estado])).toEqual([
+      ["transferencia_enviada", 800000, "en_revision"],
+      ["transferencia_recibida", 1250000, "en_revision"],
+      ["gasto", 320000, "en_revision"],
+    ]);
+    expect(novedad.transacciones[2].categoriaId).toBe("entretenimiento");
+    // Nada cuenta hasta confirmar.
+    expect(await repo.confirmadasEntre("2026-10-01", "2026-10-31")).toHaveLength(0);
+  });
+
+  it("se pueden confirmar todos juntos o descartar de a uno", async () => {
+    const { transacciones } = await recibirCaptura(sesion, LISTADO);
+    await descartar(sesion, transacciones[1].id);
+    const anotados = await confirmarVarios(sesion, [transacciones[0].id, transacciones[2].id]);
+    expect(anotados.mensajes[0].texto).toBe("Anotados 2 movimientos.");
+    expect(await repo.confirmadasEntre("2026-10-01", "2026-10-31")).toHaveLength(2);
+  });
+
+  it("marca lo que hay que revisar: sentido, fecha y repetidos", async () => {
+    const comprobante = "Comprobante de transferencia\n$ 12.500\nDe\nAna Diaz\nPara\nMaria Lopez\nNúmero de operación 123456789012";
+    const primera = await recibirCaptura(sesion, comprobante);
+    const id = primera.transacciones[0].id;
+    expect(primera.mensajes[0].datos).toMatchObject({ clase: "lote", avisos: { [id]: ["sentido", "sin_fecha"] } });
+
+    await editar(sesion, id, { tipo: "transferencia_recibida" });
+    const otraVez = await recibirCaptura(sesion, comprobante.replace("De\nAna Diaz", "Recibiste\nDe\nAna Diaz"));
+    const repetida = otraVez.transacciones[0];
+    expect(otraVez.mensajes[0].datos).toMatchObject({ avisos: { [repetida.id]: ["sin_fecha", "duplicado"] } });
+  });
+
+  it("si la imagen no trae importes, lo dice y no crea nada", async () => {
+    const novedad = await recibirCaptura(sesion, "Foto de un gato\n14:32");
+    expect(novedad.mensajes[0].texto).toContain("No encontré ningún movimiento");
+    expect(novedad.transacciones).toHaveLength(0);
   });
 });

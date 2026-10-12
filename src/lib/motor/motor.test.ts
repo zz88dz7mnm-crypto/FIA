@@ -7,7 +7,11 @@ import { CATEGORIAS_DE_MUESTRA } from "./muestras";
 import { plano } from "./texto";
 
 const HOY = "2026-10-11"; // domingo
-const ctx = { hoy: HOY, categorias: CATEGORIAS_DE_MUESTRA, reglas: [] };
+const FRASCOS = [
+  { id: "f-facu", nombre: "Facu" },
+  { id: "f-viaje", nombre: "Viaje a Bariloche" },
+];
+const ctx = { hoy: HOY, categorias: CATEGORIAS_DE_MUESTRA, reglas: [], frascos: FRASCOS };
 
 const leer = (texto: string) => buscarImportes(plano(texto)).map((i) => i.centavos);
 const movimiento = (texto: string) => {
@@ -210,7 +214,7 @@ describe("interpretar: consultas y comandos", () => {
 });
 
 describe("completar una pregunta", () => {
-  const base = { tipo: null, centavos: null, categoriaId: null, descripcion: "Cosas", fecha: HOY, importeDudoso: false };
+  const base = { tipo: null, centavos: null, categoriaId: null, descripcion: "Cosas", fecha: HOY, importeDudoso: false, frascoId: null };
 
   it("toma el importe si la respuesta es solo eso", () => {
     expect(completar(base, "importe", "fueron 4.500")?.centavos).toBe(450000);
@@ -223,5 +227,38 @@ describe("completar una pregunta", () => {
     expect(completar(base, "tipo", "fue un ingreso")?.tipo).toBe("ingreso");
     expect(completar(base, "tipo", "la recibí")?.tipo).toBe("transferencia_recibida");
     expect(completar(base, "tipo", "taxi 3200")).toBeNull();
+  });
+});
+
+describe("frascos", () => {
+  it.each<[string, Intencion]>([
+    ["frasco comida 30000", { clase: "frasco_asignar", nombre: "Comida", frascoId: null, centavos: 3000000 }],
+    ["yo designo 20000 pesos a gastos de la facu", { clase: "frasco_asignar", nombre: "Facu", frascoId: "f-facu", centavos: 2000000 }],
+    ["poné 15 lucas en el frasco de vacaciones", { clase: "frasco_asignar", nombre: "Vacaciones", frascoId: null, centavos: 1500000 }],
+    ["crear frasco salidas con amigos", { clase: "frasco_asignar", nombre: "Salidas con amigos", frascoId: null, centavos: null }],
+    ["sumale 5000 al frasco facu", { clase: "frasco_asignar", nombre: "Facu", frascoId: "f-facu", centavos: 500000 }],
+    ["sacá 5000 del frasco facu", { clase: "frasco_asignar", nombre: "Facu", frascoId: "f-facu", centavos: -500000 }],
+    ["frasco viaje a bariloche 100.000", { clase: "frasco_asignar", nombre: "Viaje a Bariloche", frascoId: "f-viaje", centavos: 10000000 }],
+    ["borrá el frasco facu", { clase: "frasco_borrar", nombre: "Facu", frascoId: "f-facu" }],
+    ["mis frascos", { clase: "frascos" }],
+    ["¿cómo vienen los frascos?", { clase: "frascos" }],
+  ])("%s", (texto, esperado) => {
+    expect(interpretar(texto, ctx)).toEqual(esperado);
+  });
+
+  it("un gasto que nombra un frasco se descuenta de ahí", () => {
+    expect(movimiento("gasté 3000 en apuntes de la facu").borrador).toMatchObject({
+      tipo: "gasto", centavos: 300000, descripcion: "Apuntes de la facu", frascoId: "f-facu",
+    });
+    expect(movimiento("pagué 45000 del frasco viaje a bariloche, pasajes").borrador.frascoId).toBe("f-viaje");
+    expect(movimiento("apuntes 3000 frasco facu").borrador).toMatchObject({ centavos: 300000, frascoId: "f-facu" });
+  });
+
+  it("sin nombrar un frasco, no se descuenta de ninguno", () => {
+    expect(movimiento("gasté 4500 en almuerzo").borrador.frascoId).toBeNull();
+  });
+
+  it("un ingreso no se descuenta de un frasco aunque lo nombre", () => {
+    expect(movimiento("cobré 50000 de la facu").borrador.frascoId).toBeNull();
   });
 });

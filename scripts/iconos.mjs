@@ -1,25 +1,14 @@
-// Genera los íconos de la app a partir del dibujo de Fia. Uso: node scripts/iconos.mjs
+// Genera los íconos de la app: el signo de pesos de Fia. Uso: node scripts/iconos.mjs
 import sharp from "sharp";
 
-const fia = `
-  <path d="M8 66V28C8 14.7 18.7 6 32 6s24 8.7 24 22v38l-6-6-6 6-6-6-6 6-6-6-6 6-6-6z"
-    fill="#ffc2d1" stroke="#14183a" stroke-width="3" stroke-linejoin="round"/>
-  <circle cx="16.5" cy="38" r="3.4" fill="#f58fa9" opacity="0.75"/>
-  <circle cx="47.5" cy="38" r="3.4" fill="#f58fa9" opacity="0.75"/>
-  <ellipse cx="24" cy="30" rx="2.9" ry="3.8" fill="#14183a"/>
-  <ellipse cx="40" cy="30" rx="2.9" ry="3.8" fill="#14183a"/>
-  <circle cx="25" cy="28.6" r="0.9" fill="#fff"/>
-  <circle cx="41" cy="28.6" r="0.9" fill="#fff"/>
-  <path d="M27 39q5 4.6 10 0" fill="none" stroke="#14183a" stroke-width="2.4" stroke-linecap="round"/>
-  <g stroke="#2438c2" stroke-width="2" stroke-linecap="round" opacity="0.4">
-    <path d="M21 50h22"/><path d="M21 55h13"/>
-  </g>`;
-
-// Fia ocupa el 56% del alto: entra en la zona segura de los íconos "maskable".
+// El signo ocupa la mitad del lado: entra en la zona segura de los íconos "maskable".
 const icono = (lado) => `
-  <svg xmlns="http://www.w3.org/2000/svg" width="${lado}" height="${lado}" viewBox="0 0 128 128">
-    <rect width="128" height="128" fill="#2438c2"/>
-    <g transform="translate(32 28)">${fia}</g>
+  <svg xmlns="http://www.w3.org/2000/svg" width="${lado}" height="${lado}" viewBox="0 0 96 96">
+    <rect width="96" height="96" fill="#14804a"/>
+    <g transform="translate(9.6 9.6) scale(1.6)" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round">
+      <path d="M30.5 17.5c-1.2-2.6-3.6-4-6.7-4-4 0-6.8 2.2-6.8 5.4 0 7.2 14 3.6 14 10.7 0 3.3-2.9 5.5-7 5.5-3.4 0-6-1.5-7.2-4.3"/>
+      <path d="M24 9.5v29"/>
+    </g>
   </svg>`;
 
 const salidas = [

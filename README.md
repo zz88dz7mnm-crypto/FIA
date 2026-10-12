@@ -7,7 +7,8 @@ Asistente de finanzas personales. Le contás a Fia qué gastaste o cobraste en u
 - `src/lib/motor/`: el motor de reglas. Lee importes, fechas, tipos y categorías de un mensaje. Es código puro y tiene pruebas.
 - `src/lib/fia/`: la conversación y la voz de Fia.
 - `src/lib/datos/`: acceso a la base (Supabase) y una versión en memoria para pruebas y demo.
-- `src/components/`: la pantalla del chat, los tickets y el personaje.
+- `src/components/`: la pantalla del chat y los tickets.
+- `src/lib/ocr.ts`: lectura de capturas dentro del navegador (la imagen no sale del celular).
 - `supabase/schema.sql`: tablas, permisos y categorías de arranque. Se pega en el SQL Editor de Supabase.
 
 ## Desarrollo

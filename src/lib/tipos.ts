@@ -10,9 +10,19 @@ export type Transaccion = {
   fecha: string;
   descripcion: string;
   categoriaId: string | null;
+  /** Frasco del que se descuenta, si tiene. */
+  frascoId: string | null;
+  /** Número de operación leído de un comprobante, si lo hay. */
+  referencia: string | null;
   estado: Estado;
   creadoEn: string;
 };
+
+/** Un frasco con sus cuentas: lo que se le puso y lo que ya se gastó de ahí. */
+export type EstadoFrasco = { id: string; nombre: string; asignado: number; gastado: number };
+
+/** Algo de un movimiento propuesto que conviene mirar antes de anotarlo. */
+export type Aviso = "duplicado" | "importe_dudoso" | "sentido" | "sin_fecha";
 
 export type Resumen = {
   periodo: Periodo;
@@ -29,6 +39,11 @@ export type DatosMensaje =
   | { clase: "ejemplos" }
   | { clase: "pide_nombre" }
   | { clase: "propuesta"; transaccionId: string; aviso?: "duplicado" | "importe_dudoso" }
+  /** Mensaje del usuario que era una imagen. El texto leído queda guardado aparte. */
+  | { clase: "captura" }
+  /** Los movimientos encontrados en una captura, cada uno para revisar por separado. */
+  | { clase: "lote"; transaccionIds: string[]; avisos: Record<string, Aviso[]> }
+  | { clase: "frascos"; frascos: EstadoFrasco[] }
   | {
       clase: "pregunta";
       falta: "importe" | "tipo";

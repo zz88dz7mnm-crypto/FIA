@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { centavosADecimal, decimalACentavos } from "../motor/importes";
-import type { DatosMensaje, Mensaje, Transaccion } from "../tipos";
-import type { CambiosTransaccion, Repositorio } from "./repositorio";
+import { ES_ENTRADA, type DatosMensaje, type Mensaje, type Transaccion } from "../tipos";
+import { ErrorDeDatos, type CambiosTransaccion, type Repositorio } from "./repositorio";
 
 type FilaTransaccion = {
   id: string;
@@ -10,13 +10,15 @@ type FilaTransaccion = {
   fecha: string;
   descripcion: string;
   categoria_id: string | null;
+  frasco_id: string | null;
+  referencia: string | null;
   estado: Transaccion["estado"];
   creado_en: string;
 };
 
 type FilaMensaje = { id: string; autor: Mensaje["autor"]; texto: string; datos: DatosMensaje | Record<string, never>; creado_en: string };
 
-const COLUMNAS_TRANSACCION = "id, tipo, importe, fecha, descripcion, categoria_id, estado, creado_en";
+const COLUMNAS_TRANSACCION = "id, tipo, importe, fecha, descripcion, categoria_id, frasco_id, referencia, estado, creado_en";
 const COLUMNAS_MENSAJE = "id, autor, texto, datos, creado_en";
 
 const aTransaccion = (f: FilaTransaccion): Transaccion => ({
@@ -26,6 +28,8 @@ const aTransaccion = (f: FilaTransaccion): Transaccion => ({
   fecha: f.fecha,
   descripcion: f.descripcion,
   categoriaId: f.categoria_id,
+  frascoId: f.frasco_id,
+  referencia: f.referencia,
   estado: f.estado,
   creadoEn: f.creado_en,
 });
@@ -43,8 +47,8 @@ type FilaCategoria = { id: string; nombre: string; clase: "gasto" | "ingreso"; p
 type FilaRegla = { patron: string; categoria_id: string };
 
 /** Lanza si Supabase devolvió error; si no, entrega los datos con el tipo de fila esperado. */
-function exigir<T>({ data, error }: { data: unknown; error: { message: string } | null }): T {
-  if (error) throw new Error(error.message);
+function exigir<T>({ data, error }: { data: unknown; error: { message: string; code?: string } | null }): T {
+  if (error) throw new ErrorDeDatos(error.message, error.code);
   return data as T;
 }
 
@@ -75,8 +79,10 @@ export function repositorioSupabase(db: SupabaseClient, usuarioId: string): Repo
       );
       return filas.map(aMensaje).reverse();
     },
-    async agregarMensaje({ autor, texto, datos = { clase: "texto" } }) {
-      const fila = exigir<FilaMensaje>(await db.from("mensajes").insert({ autor, texto, datos }).select(COLUMNAS_MENSAJE).single());
+    async agregarMensaje({ autor, texto, datos = { clase: "texto" }, textoExtraido }) {
+      const fila = exigir<FilaMensaje>(
+        await db.from("mensajes").insert({ autor, texto, datos, texto_extraido: textoExtraido ?? null }).select(COLUMNAS_MENSAJE).single(),
+      );
       return aMensaje(fila);
     },
     async transaccionesPorId(ids) {
@@ -95,8 +101,11 @@ export function repositorioSupabase(db: SupabaseClient, usuarioId: string): Repo
             descripcion: nueva.descripcion,
             categoria_id: nueva.categoriaId,
             origen_mensaje_id: nueva.origenMensajeId,
+            frasco_id: nueva.frascoId ?? null,
+            contraparte: nueva.contraparte ?? null,
+            referencia: nueva.referencia ?? null,
             estado: "en_revision",
-            metodo: "texto",
+            metodo: nueva.metodo ?? "texto",
           })
           .select(COLUMNAS_TRANSACCION)
           .single(),
@@ -145,6 +154,32 @@ export function repositorioSupabase(db: SupabaseClient, usuarioId: string): Repo
       );
       return filas.map(aTransaccion);
     },
+    async frascos() {
+      const [frascos, aportes, gastos] = await Promise.all([
+        db.from("frascos").select("id, nombre").order("creado_en"),
+        db.from("aportes_frasco").select("frasco_id, importe"),
+        db.from("transacciones").select("frasco_id, importe, tipo").eq("estado", "confirmada").not("frasco_id", "is", null),
+      ]);
+      const sumar = (filas: { frasco_id: string; importe: number | string }[], id: string) =>
+        filas.filter((f) => f.frasco_id === id).reduce((suma, f) => suma + decimalACentavos(f.importe), 0);
+      const salidas = exigir<{ frasco_id: string; importe: number | string; tipo: Transaccion["tipo"] }[]>(gastos).filter((g) => !ES_ENTRADA[g.tipo]);
+      const puestos = exigir<{ frasco_id: string; importe: number | string }[]>(aportes);
+      return exigir<{ id: string; nombre: string }[]>(frascos).map((f) => ({
+        id: f.id,
+        nombre: f.nombre,
+        asignado: sumar(puestos, f.id),
+        gastado: sumar(salidas, f.id),
+      }));
+    },
+    async crearFrasco(nombre) {
+      return exigir<{ id: string; nombre: string }>(await db.from("frascos").insert({ nombre }).select("id, nombre").single());
+    },
+    async aportarAFrasco(id, centavos) {
+      exigir<unknown>(await db.from("aportes_frasco").insert({ frasco_id: id, importe: centavosADecimal(centavos) }).select("id"));
+    },
+    async borrarFrasco(id) {
+      exigir<unknown>(await db.from("frascos").delete().eq("id", id).select("id"));
+    },
   };
 }
 
@@ -155,6 +190,7 @@ function aColumnas(cambios: CambiosTransaccion): Record<string, unknown> {
   if (cambios.fecha !== undefined) columnas.fecha = cambios.fecha;
   if (cambios.descripcion !== undefined) columnas.descripcion = cambios.descripcion;
   if (cambios.categoriaId !== undefined) columnas.categoria_id = cambios.categoriaId;
+  if (cambios.frascoId !== undefined) columnas.frasco_id = cambios.frascoId;
   if (cambios.estado !== undefined) columnas.estado = cambios.estado;
   return columnas;
 }

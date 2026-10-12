@@ -7,6 +7,7 @@ const MESES = [
   "enero", "febrero", "marzo", "abril", "mayo", "junio",
   "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
 ];
+const ABREVIADOS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 const DIAS = ["domingo", "lunes", "martes", "miercoles", "jueves", "viernes", "sabado"];
 
 function partes(iso: string): [number, number, number] {
@@ -38,8 +39,12 @@ function sinAnio(mes: number, dia: number, hoy: string): string | null {
   return armar(anio - 1, mes, dia);
 }
 
-/** Busca una fecha en un texto plano. Devuelve la primera que encuentre. */
-export function buscarFecha(textoPlano: string, hoy: string): FechaLeida | null {
+/**
+ * Busca una fecha en un texto plano. Devuelve la primera que encuentre.
+ * Con `abreviados` acepta también "9 oct 2026", como escriben las apps de los bancos;
+ * en el chat queda apagado porque confundiría frases como "2 set de vasos".
+ */
+export function buscarFecha(textoPlano: string, hoy: string, { abreviados = false } = {}): FechaLeida | null {
   let m: RegExpExecArray | null;
 
   if ((m = /\b(antes de ayer|anteayer)\b/.exec(textoPlano))) {
@@ -59,11 +64,13 @@ export function buscarFecha(textoPlano: string, hoy: string): FechaLeida | null 
     if (fecha) return { inicio: m.index, fin: m.index + m[0].length, fecha };
   }
 
-  // "5 de octubre" · "el 5 de octubre de 2025"
-  const conMes = new RegExp(String.raw`\b(?:el\s+)?(\d{1,2})\s+de\s+(${MESES.join("|")})(?:\s+(?:de|del)\s+(\d{4}))?\b`);
+  // "5 de octubre" · "el 5 de octubre de 2025" · con `abreviados`: "9 oct 2026", "9 de oct."
+  const conMes = abreviados
+    ? new RegExp(String.raw`\b(?:el\s+)?(\d{1,2})\s+(?:de\s+)?(${MESES.join("|")}|sept|set|${ABREVIADOS.join("|")})\.?(?:\s+(?:de\s+|del\s+)?(\d{4}))?\b`)
+    : new RegExp(String.raw`\b(?:el\s+)?(\d{1,2})\s+de\s+(${MESES.join("|")})(?:\s+(?:de|del)\s+(\d{4}))?\b`);
   if ((m = conMes.exec(textoPlano))) {
     const dia = Number(m[1]);
-    const mes = MESES.indexOf(m[2]) + 1;
+    const mes = (MESES.includes(m[2]) ? MESES.indexOf(m[2]) : ABREVIADOS.indexOf(m[2] === "set" ? "sep" : m[2].slice(0, 3))) + 1;
     const fecha = m[3] ? armar(Number(m[3]), mes, dia) : sinAnio(mes, dia, hoy);
     if (fecha) return { inicio: m.index, fin: m.index + m[0].length, fecha };
   }

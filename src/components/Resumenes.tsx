@@ -2,7 +2,7 @@ import type { Categoria } from "@/lib/motor/categorias";
 import { describirFecha } from "@/lib/motor/fechas";
 import { formatearImporte } from "@/lib/motor/importes";
 import { tituloDePeriodo } from "@/lib/fia/voz";
-import type { Resumen, Transaccion } from "@/lib/tipos";
+import type { EstadoFrasco, Resumen, Transaccion } from "@/lib/tipos";
 import { Importe } from "./Ticket";
 
 /** Renglón de ticket: concepto a la izquierda, importe a la derecha y puntos de guía en el medio. */
@@ -80,6 +80,36 @@ export function TicketLista({
                 </p>
               </div>
               <Importe transaccion={t} className={t.estado === "anulada" ? "line-through" : ""} />
+            </li>
+          );
+        })}
+      </ul>
+    </Marco>
+  );
+}
+
+/** Cada frasco con lo que le queda y una barra de cuánto se usó. */
+export function TicketFrascos({ frascos, animar }: { frascos: EstadoFrasco[]; animar: boolean }) {
+  return (
+    <Marco titulo={frascos.length === 1 ? "Frasco" : "Frascos"} animar={animar}>
+      <ul className="mt-2.5 grid gap-4 pb-1">
+        {frascos.map((frasco) => {
+          const queda = frasco.asignado - frasco.gastado;
+          const usado = frasco.asignado > 0 ? Math.min(100, Math.round((frasco.gastado / frasco.asignado) * 100)) : frasco.gastado > 0 ? 100 : 0;
+          return (
+            <li key={frasco.id}>
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="min-w-0 truncate text-[15px] font-semibold">{frasco.nombre}</span>
+                <span className={`font-mono text-[16px] font-medium tabular-nums ${queda < 0 ? "text-rojo" : ""}`}>
+                  {formatearImporte(queda)}
+                </span>
+              </div>
+              <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-linea/60" role="img" aria-label={`Usaste el ${usado}% del frasco`}>
+                <div className={`h-full rounded-full ${queda < 0 ? "bg-rojo" : "bg-birome"}`} style={{ width: `${usado}%` }} />
+              </div>
+              <p className="mt-1 text-[12px] text-tinta-suave">
+                {queda < 0 ? "Te pasaste. " : ""}Gastaste {formatearImporte(frasco.gastado)} de {formatearImporte(frasco.asignado)}
+              </p>
             </li>
           );
         })}

@@ -28,7 +28,7 @@ export const voz = {
   gusto: (nombre: string) => `Un gusto, ${nombre}. Contame un gasto así como lo dirías:`,
   saludo: (nombre: string | null) => (nombre ? `¡Hola, ${nombre}! ¿Qué anotamos?` : "¡Hola! ¿Qué anotamos?"),
   gracias: "De nada. Para eso estoy.",
-  ayuda: "Escribime lo que gastaste o cobraste, con el importe. También te armo el resumen o te muestro lo último que anoté.",
+  ayuda: "Escribime lo que gastaste o cobraste, con el importe, o mandame una captura de la transferencia. También te armo el resumen, te muestro lo último que anoté y te cuido los frascos.",
   noLoLei: "Eso no lo pude leer. Decímelo con un importe, por ejemplo:",
 
   propuesta: "¿Lo anoto así?",
@@ -66,8 +66,33 @@ export const voz = {
   deshacer: "Este es el último que anoté. Si estaba mal, tocá Anular.",
   deshacerVacio: "No hay nada anotado para anular.",
 
+  capturaLeyendo: "leyendo la captura…",
+  capturaIlegible: "No pude leer esa imagen. Probá de nuevo, o contámelo por texto.",
+  capturaVacia: "No encontré ningún movimiento en esa imagen. Probá con una captura más nítida, o contámelo por texto.",
+  capturaUna: "Encontré un movimiento en la captura. ¿Lo anoto así?",
+  capturaVarias: (cantidad: number) => `Encontré ${cantidad} movimientos en la captura. Revisalos uno por uno.`,
+  anotadosVarios: (cantidad: number) => `Anotados ${cantidad} movimientos.`,
+
+  frascos: "Así están tus frascos:",
+  frascosVacio: "Todavía no armaste ningún frasco. Probá con «frasco facu 20000».",
+  frascoSinNombre: "¿Cómo se llama el frasco? Decímelo así: «frasco facu 20000».",
+  frascoNoExiste: (nombre: string) => `No tengo un frasco que se llame «${nombre}».`,
+  frascoCreado: (nombre: string, centavos: number | null) =>
+    centavos
+      ? `Armé el frasco ${nombre} con ${formatearImporte(centavos)}. Cuando un gasto sea de ahí, nombralo y lo descuento.`
+      : `Armé el frasco ${nombre}. Está vacío: decime cuánto le ponés, por ejemplo «frasco ${nombre.toLowerCase()} 20000».`,
+  frascoSumado: (nombre: string, centavos: number) => `Sumé ${formatearImporte(centavos)} al frasco ${nombre}.`,
+  frascoRestado: (nombre: string, centavos: number) => `Saqué ${formatearImporte(centavos)} del frasco ${nombre}.`,
+  frascoEstado: (nombre: string) => `Así está el frasco ${nombre}:`,
+  frascoBorrado: (nombre: string) => `Borré el frasco ${nombre}. Los gastos que tenía siguen anotados.`,
+  anotadoEnFrasco: (nombre: string, queda: number) =>
+    queda >= 0
+      ? `Anotado. En el frasco ${nombre} te quedan ${formatearImporte(queda)}.`
+      : `Anotado. Te pasaste ${formatearImporte(-queda)} del frasco ${nombre}.`,
+
   falla: "No pude guardar eso. Revisá la conexión y probá de nuevo.",
+  baseDesactualizada: "A tu base le falta una actualización. Pegá de nuevo el archivo supabase/schema.sql en el SQL Editor de Supabase y volvé a entrar.",
 };
 
 /** Frases de ejemplo que Fia ofrece como atajos. */
-export const EJEMPLOS = ["gasté 4500 en almuerzo", "cobré 250 lucas de sueldo", "resumen del mes"];
+export const EJEMPLOS = ["gasté 4500 en almuerzo", "cobré 250 lucas de sueldo", "frasco facu 20000", "resumen del mes"];

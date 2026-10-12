@@ -33,7 +33,7 @@ export function Aplicacion() {
   if (estado.paso === "cargando") {
     return (
       <main className="grid min-h-dvh place-items-center" aria-busy="true" aria-label="Cargando">
-        <Fia animo="pensando" className="animate-flotar h-24 w-auto" />
+        <Fia className="size-16 animate-pulse" />
       </main>
     );
   }
