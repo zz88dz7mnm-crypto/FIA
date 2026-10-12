@@ -11,11 +11,13 @@ import { formatearCompacto, formatearImporte } from "@/lib/motor/importes";
 import {
   fechaCorta,
   gastoPorCategoria,
+  porciones,
   serie,
   topeRedondo,
   totales,
   transferenciasPorPersona,
   variacion,
+  type GrupoDeGasto,
   type Punto,
 } from "@/lib/panel";
 import { NOMBRE_DE_TIPO, type EstadoFrasco, type Transaccion } from "@/lib/tipos";
@@ -95,12 +97,12 @@ export function Panel({ repo, rutaChat, salir }: { repo: Repositorio; rutaChat: 
   return (
     <div className="min-h-dvh">
       <header className="sticky top-0 z-20 px-3 pt-[max(env(safe-area-inset-top),0.75rem)]">
-        <div className="cristal relative mx-auto flex max-w-6xl items-center gap-3 rounded-[26px] py-2 pr-2 pl-3">
-          <Fia className="size-10 shrink-0" />
-          <p className="min-w-0 flex-1 truncate text-[17px] font-semibold tracking-[-0.01em]">Panel</p>
+        <div className="cristal relative mx-auto flex max-w-6xl items-center gap-2.5 rounded-full py-1.5 pr-1.5 pl-2">
+          <Fia className="size-9 shrink-0" />
+          <p className="min-w-0 flex-1 truncate text-[16px] font-semibold tracking-[-0.01em]">Panel</p>
           <Link
             href={rutaChat}
-            className="flex h-10 items-center gap-1.5 rounded-full bg-black/5 px-3.5 text-[15px] font-medium text-acento transition-colors active:bg-black/10"
+            className="flex h-9 items-center gap-1.5 rounded-full bg-black/5 px-3.5 text-[15px] font-medium text-acento transition-colors active:bg-black/10"
           >
             <IconoChat className="size-[18px]" />
             Chat
@@ -111,7 +113,7 @@ export function Panel({ repo, rutaChat, salir }: { repo: Repositorio; rutaChat: 
               aria-label="Más opciones"
               aria-expanded={menuAbierto}
               onClick={() => setMenuAbierto((abierto) => !abierto)}
-              className="grid size-10 place-items-center rounded-full text-tinta-suave transition-colors active:bg-black/5"
+              className="grid size-9 place-items-center rounded-full text-tinta-suave transition-colors active:bg-black/5"
             >
               <IconoMas className="size-5" />
             </button>
@@ -238,26 +240,7 @@ function Contenido({ base, datos, rutaChat }: { base: Base; datos: Datos; rutaCh
         </div>
         <section className="order-4 min-w-0 cristal rounded-[28px] p-5 sm:p-6">
           <h2 className="text-[20px] font-semibold tracking-[-0.01em]">En qué se fue</h2>
-          {grupos.length ? (
-            <ul className="mt-4 grid gap-4">
-              {grupos.map((grupo) => (
-                <li key={grupo.id ?? "sin-clasificar"}>
-                  <div className="flex items-baseline justify-between gap-3 text-[15px]">
-                    <span className="min-w-0 truncate">{grupo.nombre}</span>
-                    <span className="cifras shrink-0 font-medium">{formatearImporte(grupo.centavos)}</span>
-                  </div>
-                  <div className="mt-1.5 h-1.5 rounded-full bg-acento/12">
-                    <div className="h-full rounded-full bg-acento" style={{ width: `${Math.max(2, (grupo.centavos / grupos[0].centavos) * 100)}%` }} />
-                  </div>
-                  <p className="cifras mt-1 text-[13px] text-tinta-suave">
-                    {grupo.parte < 0.01 ? "Menos del 1%" : `${Math.round(grupo.parte * 100)}%`} de lo que salió
-                  </p>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="mt-3 text-[15px] text-tinta-suave">No salió plata en este período.</p>
-          )}
+          <Circular grupos={grupos} total={cuentas.salio} />
         </section>
         {personas.length > 0 && (
           <section className="order-5 min-w-0 cristal rounded-[28px] p-5 sm:p-6">
@@ -337,7 +320,7 @@ function Barras({ puntos, porMes, hoy }: { puntos: Punto[]; porMes: boolean; hoy
 
   return (
     <div className="mt-6">
-      <div className="relative h-44 pl-14 sm:h-52" onPointerLeave={() => setActivo(null)}>
+      <div className="relative h-44 pl-14 sm:h-52" onPointerLeave={(evento) => evento.pointerType === "mouse" && setActivo(null)}>
         {[1, 0.5, 0].map((nivel) => (
           <div key={nivel} className="absolute inset-x-0 flex items-center" style={{ bottom: `${nivel * 100}%` }}>
             <span className="cifras w-14 pr-2 text-right text-[11px] leading-none text-tinta-tenue">{formatearCompacto(tope * nivel)}</span>
@@ -350,10 +333,10 @@ function Barras({ puntos, porMes, hoy }: { puntos: Punto[]; porMes: boolean; hoy
               key={punto.clave}
               type="button"
               aria-label={`${nombre(punto)}: salió ${formatearImporte(punto.salio)}`}
-              onPointerEnter={() => setActivo(i)}
+              onPointerEnter={(evento) => evento.pointerType === "mouse" && setActivo(i)}
               onFocus={() => setActivo(i)}
               onBlur={() => setActivo(null)}
-              onClick={() => setActivo(i)}
+              onClick={() => setActivo((previo) => (previo === i ? null : i))}
               className="group relative flex h-full min-w-0 flex-1 items-end justify-center rounded-t-md outline-offset-0"
             >
               <span
@@ -394,6 +377,99 @@ function Barras({ puntos, porMes, hoy }: { puntos: Punto[]; porMes: boolean; hoy
         ))}
       </div>
     </div>
+  );
+}
+
+const RADIO = 46;
+const GROSOR = 15;
+const VUELTA = 2 * Math.PI * RADIO;
+
+/**
+ * Reparto de lo que salió por tipo de operación. Como mucho seis porciones, cada una con el
+ * color fijo de su categoría. La lista de abajo es la leyenda y lleva los valores escritos,
+ * así nada depende solo del color.
+ */
+function Circular({ grupos, total }: { grupos: GrupoDeGasto[]; total: number }) {
+  const [activa, setActiva] = useState<string | null>(null);
+  const partes = porciones(grupos);
+  if (!partes.length || total <= 0) return <p className="mt-3 text-[15px] text-tinta-suave">No salió plata en este período.</p>;
+
+  // Entre porción y porción queda un hueco fino del color de la tarjeta.
+  const hueco = partes.length > 1 ? 1.6 : 0;
+  const arcos = partes.map((parte, i) => {
+    const antes = partes.slice(0, i).reduce((suma, p) => suma + p.centavos, 0);
+    const largo = Math.max((parte.centavos / total) * VUELTA - hueco, 0.8);
+    return { ...parte, largo, inicio: (antes / total) * VUELTA + hueco / 2 };
+  });
+  const elegida = partes.find((p) => p.clave === activa);
+  const cifra = formatearImporte(elegida ? elegida.centavos : total);
+  const porcentaje = (parte: number) => (parte < 0.01 ? "<1%" : `${Math.round(parte * 100)}%`);
+
+  const alPasar = (clave: string | null) => (evento: React.PointerEvent) => evento.pointerType === "mouse" && setActiva(clave);
+  const alTocar = (clave: string) => () => setActiva((previa) => (previa === clave ? null : clave));
+
+  return (
+    <>
+      <div className="relative mx-auto mt-5 size-44">
+        <svg viewBox="0 0 120 120" className="size-full" role="img" aria-label="Reparto de lo que salió, por tipo de operación">
+          <g transform="rotate(-90 60 60)">
+            {arcos.map((arco) => (
+              <circle
+                key={arco.clave}
+                cx="60"
+                cy="60"
+                r={RADIO}
+                fill="none"
+                stroke={arco.color}
+                strokeWidth={activa === arco.clave ? GROSOR + 3 : GROSOR}
+                strokeDasharray={`${arco.largo} ${VUELTA - arco.largo}`}
+                strokeDashoffset={-arco.inicio}
+                opacity={activa && activa !== arco.clave ? 0.3 : 1}
+                className="cursor-pointer transition-[opacity,stroke-width] duration-150"
+                onPointerEnter={alPasar(arco.clave)}
+                onPointerLeave={alPasar(null)}
+                onClick={alTocar(arco.clave)}
+              />
+            ))}
+          </g>
+        </svg>
+        <div className="pointer-events-none absolute inset-0 grid place-items-center" aria-live="polite">
+          <div className="max-w-[6.5rem] text-center">
+            <p className="text-[12px] leading-tight text-tinta-suave">{elegida ? elegida.nombre : "Salió"}</p>
+            <p className="mt-0.5 text-[18px] leading-tight font-semibold tracking-[-0.02em]">
+              {cifra.length > 9 ? formatearCompacto(elegida ? elegida.centavos : total) : cifra}
+            </p>
+            {elegida && <p className="cifras text-[12px] leading-tight text-tinta-suave">{porcentaje(elegida.parte)}</p>}
+          </div>
+        </div>
+      </div>
+
+      <ul className="-mx-2 mt-4 flex flex-col gap-0.5">
+        {[...partes]
+          .sort((a, b) => b.centavos - a.centavos)
+          .map((parte) => (
+            <li key={parte.clave}>
+              <button
+                type="button"
+                aria-pressed={activa === parte.clave}
+                onPointerEnter={alPasar(parte.clave)}
+                onPointerLeave={alPasar(null)}
+                onFocus={() => setActiva(parte.clave)}
+                onBlur={() => setActiva(null)}
+                onClick={alTocar(parte.clave)}
+                className={`flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left text-[15px] transition-colors ${
+                  activa === parte.clave ? "bg-black/5" : ""
+                }`}
+              >
+                <span aria-hidden="true" className="size-3 shrink-0 rounded-[4px]" style={{ background: parte.color }} />
+                <span className="min-w-0 flex-1 truncate">{parte.nombre}</span>
+                <span className="cifras w-9 shrink-0 text-right text-[13px] text-tinta-suave">{porcentaje(parte.parte)}</span>
+                <span className="cifras shrink-0 font-medium">{formatearImporte(parte.centavos)}</span>
+              </button>
+            </li>
+          ))}
+      </ul>
+    </>
   );
 }
 

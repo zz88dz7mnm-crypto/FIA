@@ -34,7 +34,12 @@ export interface Repositorio {
   perfil(): Promise<Perfil>;
   guardarNombre(nombre: string): Promise<void>;
   categorias(): Promise<Categoria[]>;
+  /** Crea una categoría propia, para clasificar a mano lo que no entra en las de siempre. */
+  crearCategoria(nombre: string, clase: Categoria["clase"]): Promise<Categoria>;
   reglas(): Promise<ReglaPersonal[]>;
+  /** Recuerda que ese texto va a esa categoría. Si ya había una regla para el texto, la reemplaza. */
+  guardarRegla(patron: string, categoriaId: string): Promise<void>;
+  borrarRegla(patron: string): Promise<void>;
 
   /** Los últimos mensajes del chat, del más viejo al más nuevo. */
   mensajes(limite: number): Promise<Mensaje[]>;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { rangoPrevio } from "./motor/fechas";
 import { CATEGORIAS_DE_MUESTRA } from "./motor/muestras";
-import { gastoPorCategoria, serie, topeRedondo, totales, transferenciasPorPersona, variacion } from "./panel";
+import { gastoPorCategoria, porciones, serie, topeRedondo, totales, transferenciasPorPersona, variacion, type GrupoDeGasto } from "./panel";
 import type { Transaccion } from "./tipos";
 
 const mov = (tipo: Transaccion["tipo"], centavos: number, fecha: string, categoriaId: string | null = null, contraparte: string | null = null): Transaccion => ({
@@ -21,9 +21,9 @@ const mov = (tipo: Transaccion["tipo"], centavos: number, fecha: string, categor
 });
 
 const MOVIMIENTOS = [
-  mov("gasto", 450000, "2026-10-03", "comida"),
-  mov("gasto", 1200000, "2026-10-03", "comida"),
-  mov("transferencia_enviada", 12000000, "2026-10-05", "vivienda"),
+  mov("gasto", 450000, "2026-10-03", "debito"),
+  mov("gasto", 1200000, "2026-10-03", "debito"),
+  mov("transferencia_enviada", 12000000, "2026-10-05", "transferencias"),
   mov("gasto", 320000, "2026-10-09"),
   mov("ingreso", 25000000, "2026-10-01", "ingresos"),
   mov("transferencia_recibida", 3000000, "2026-10-09"),
@@ -37,8 +37,8 @@ describe("panel", () => {
   it("agrupa los gastos por categoría, de mayor a menor, con su parte del total", () => {
     const grupos = gastoPorCategoria(MOVIMIENTOS, CATEGORIAS_DE_MUESTRA);
     expect(grupos.map((g) => [g.nombre, g.centavos])).toEqual([
-      ["Vivienda", 12000000],
-      ["Comida", 1650000],
+      ["Transferencias", 12000000],
+      ["Pagos con tarjeta de débito", 1650000],
       ["Sin clasificar", 320000],
     ]);
     expect(grupos.reduce((suma, g) => suma + g.parte, 0)).toBeCloseTo(1);
@@ -80,6 +80,49 @@ describe("panel", () => {
       { nombre: "Pedro Gomez", enviado: 0, recibido: 1250000, cantidad: 1 },
       { nombre: "Valentin Torres", enviado: 620000, recibido: 30000, cantidad: 3 },
     ]);
+  });
+
+  describe("gráfico circular", () => {
+    const grupo = (id: string | null, nombre: string, centavos: number): GrupoDeGasto => ({ id, nombre, centavos, parte: centavos / 1000 });
+
+    it("cada tipo de operación lleva siempre su color, en un orden fijo", () => {
+      const circulo = porciones([
+        grupo("d", "Pagos con tarjeta de débito", 500),
+        grupo("t", "Transferencias", 300),
+        grupo(null, "Sin clasificar", 200),
+      ]);
+      expect(circulo.map((p) => [p.nombre, p.color])).toEqual([
+        ["Transferencias", "#2a78d6"],
+        ["Pagos con tarjeta de débito", "#eb6834"],
+        ["Sin clasificar", "#8e8e93"],
+      ]);
+      // El color no depende de qué más haya ese mes.
+      expect(porciones([grupo("d", "Pagos con tarjeta de débito", 10)])[0].color).toBe("#eb6834");
+    });
+
+    it("nunca muestra más de seis porciones: las más chicas van a Otras", () => {
+      const circulo = porciones([
+        grupo("t", "Transferencias", 300),
+        grupo("d", "Pagos con tarjeta de débito", 250),
+        grupo("q", "Pagos con QR", 150),
+        grupo("s", "Pagos de servicios", 120),
+        grupo("c", "Pagos con tarjeta de crédito", 90),
+        grupo("i", "Impuestos", 50),
+        grupo("e", "Extracciones de efectivo", 40),
+      ]);
+      expect(circulo).toHaveLength(6);
+      expect(circulo.at(-1)).toMatchObject({ nombre: "Otras", centavos: 90, color: "#c7c7cc" });
+      expect(circulo.reduce((suma, p) => suma + p.centavos, 0)).toBe(1000);
+    });
+
+    it("de las categorías propias, solo la más grande lleva color", () => {
+      const circulo = porciones([grupo("x", "Celular", 600), grupo("t", "Transferencias", 300), grupo("y", "Gimnasio", 100)]);
+      expect(circulo.map((p) => [p.nombre, p.color])).toEqual([
+        ["Transferencias", "#2a78d6"],
+        ["Celular", "#e34948"],
+        ["Otras", "#c7c7cc"],
+      ]);
+    });
   });
 
   it("redondea el tope del eje", () => {

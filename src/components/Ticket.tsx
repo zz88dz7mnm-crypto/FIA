@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
-import type { CambiosTransaccion } from "@/lib/datos/repositorio";
+import type { CambiosDeEdicion } from "@/lib/fia/conversacion";
 import type { Categoria } from "@/lib/motor/categorias";
 import { describirFecha } from "@/lib/motor/fechas";
 import { buscarImportes, formatearImporte } from "@/lib/motor/importes";
@@ -13,7 +13,7 @@ export type AccionesDeTicket = {
   confirmar: (id: string) => void;
   descartar: (id: string) => void;
   anular: (id: string) => void;
-  editar: (id: string, cambios: Omit<CambiosTransaccion, "estado">, yaAnotado: boolean) => void;
+  editar: (id: string, cambios: CambiosDeEdicion, yaAnotado: boolean) => void;
 };
 
 type Props = {
@@ -108,7 +108,7 @@ export function Ticket({ transaccion: t, categorias, frascos, hoy, avisos = [], 
           </p>
           <p className="mt-2 text-[17px] leading-snug font-medium break-words">{t.descripcion || "Sin detalle"}</p>
           <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[15px] text-tinta-suave">
-            <span className={categoria ? "" : "text-rojo"}>{categoria ?? "Sin clasificar"}</span>
+            <span className={categoria ? "" : "text-tinta-tenue"}>{categoria ?? "Sin clasificar"}</span>
             {frasco && <span className="rounded-full bg-acento/10 px-2 py-0.5 text-[13px] font-medium text-acento">Frasco {frasco}</span>}
           </p>
 
@@ -180,6 +180,9 @@ export function BotonSuave(props: React.ComponentProps<"button">) {
   );
 }
 
+/** Valor del desplegable que abre el campo para crear una categoría propia. */
+const CATEGORIA_NUEVA = "__nueva__";
+
 const CAMPO =
   "h-11 w-full rounded-xl border border-black/8 bg-white/80 px-3 text-[16px] text-tinta outline-none focus:border-acento focus:ring-2 focus:ring-acento/20";
 
@@ -197,10 +200,11 @@ function Formulario({
   frascos: FrascoConocido[];
   hoy: string;
   ocupado: boolean;
-  alGuardar: (cambios: Omit<CambiosTransaccion, "estado">) => void;
+  alGuardar: (cambios: CambiosDeEdicion) => void;
   alCancelar: () => void;
 }) {
   const id = useId();
+  const [categoriaNueva, setCategoriaNueva] = useState("");
   const [tipo, setTipo] = useState<Tipo>(t.tipo);
   const [importe, setImporte] = useState(formatearImporte(t.centavos).replace("$", ""));
   const [categoriaId, setCategoriaId] = useState(t.categoriaId ?? "");
@@ -221,10 +225,14 @@ function Formulario({
       setError("La fecha no puede ser posterior a hoy");
       return;
     }
+    if (categoriaId === CATEGORIA_NUEVA && !categoriaNueva.trim()) {
+      setError("Ponele un nombre a la categoría nueva");
+      return;
+    }
     alGuardar({
       tipo,
       centavos: leidos[0].centavos,
-      categoriaId: categoriaId || null,
+      ...(categoriaId === CATEGORIA_NUEVA ? { categoriaNueva: categoriaNueva.trim() } : { categoriaId: categoriaId || null }),
       // Un frasco solo descuenta plata que sale de verdad.
       frascoId: ES_ENTRADA[tipo] || interna ? null : frascoId || null,
       descripcion: descripcion.trim(),
@@ -252,8 +260,15 @@ function Formulario({
               {c.nombre}
             </option>
           ))}
+          <option value={CATEGORIA_NUEVA}>Nueva categoría…</option>
         </select>
       </label>
+      {categoriaId === CATEGORIA_NUEVA && (
+        <label htmlFor={`${id}-nueva`} className="grid gap-1">
+          Nombre de la categoría nueva
+          <input id={`${id}-nueva`} value={categoriaNueva} onChange={(e) => setCategoriaNueva(e.target.value)} maxLength={40} className={CAMPO} />
+        </label>
+      )}
       {frascos.length > 0 && !ES_ENTRADA[tipo] && !interna && (
         <label htmlFor={`${id}-frasco`} className="grid gap-1">
           Frasco

@@ -44,7 +44,8 @@ export const voz = {
   anotado: "Anotado.",
   anotadoEnCategoria: (total: number, categoria: string) =>
     `Anotado. Llevás ${formatearImporte(total)} en ${categoria} este mes.`,
-  anotadoSinCategoria: "Anotado. Quedó sin clasificar: con Editar le ponés categoría.",
+  anotadoGasto: (total: number) => `Anotado. Este mes ya salieron ${formatearImporte(total)}.`,
+  reglaAprendida: (texto: string, categoria: string) => `La próxima vez que aparezca «${texto}» lo pongo en ${categoria}.`,
   anotadoIngreso: (total: number) => `Anotado. Este mes entraron ${formatearImporte(total)}.`,
   anotadoConFecha: (fecha: string, hoy: string) => `Anotado con fecha ${describirFecha(fecha, hoy)}.`,
   guardado: "Guardado.",

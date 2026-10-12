@@ -97,27 +97,35 @@ describe("fechas", () => {
 
 describe("categorías", () => {
   it("clasifica por palabra entera, con plural", () => {
-    expect(clasificar("Almuerzo con Juan", CATEGORIAS_DE_MUESTRA)?.id).toBe("comida");
-    expect(clasificar("empanadas", CATEGORIAS_DE_MUESTRA)?.id).toBe("comida");
-    expect(clasificar("barrio", CATEGORIAS_DE_MUESTRA)).toBeNull();
+    expect(clasificar("Súper con débito", CATEGORIAS_DE_MUESTRA)?.id).toBe("debito");
+    expect(clasificar("dos recargas", CATEGORIAS_DE_MUESTRA)?.id).toBe("servicios");
+    expect(clasificar("subebaja", CATEGORIAS_DE_MUESTRA)).toBeNull();
   });
 
   it("gana la frase más específica", () => {
-    expect(clasificar("gas para el transporte publico", CATEGORIAS_DE_MUESTRA)?.id).toBe("transporte");
+    expect(clasificar("pago de servicio con débito", CATEGORIAS_DE_MUESTRA)?.id).toBe("servicios");
   });
 
   it("las reglas personales pisan a las base", () => {
-    const reglas = [{ patron: "cafe", categoriaId: "entretenimiento" }];
-    expect(clasificar("café con amigos", CATEGORIAS_DE_MUESTRA, reglas)?.id).toBe("entretenimiento");
+    const reglas = [{ patron: "claro", categoriaId: "servicios" }];
+    expect(clasificar("Cp*pack Claro con débito", CATEGORIAS_DE_MUESTRA, reglas)?.id).toBe("servicios");
+  });
+
+  it("lo que no dice cómo se pagó queda sin clasificar", () => {
+    expect(clasificar("Almuerzo con Juan", CATEGORIAS_DE_MUESTRA)).toBeNull();
   });
 });
 
 describe("interpretar: formato con punto y coma", () => {
-  it("gasto; 4500; comida; almuerzo", () => {
-    expect(movimiento("gasto; 4500; comida; almuerzo")).toMatchObject({
+  it("gasto; 4500; débito; almuerzo", () => {
+    expect(movimiento("gasto; 4500; débito; almuerzo")).toMatchObject({
       falta: null,
-      borrador: { tipo: "gasto", centavos: 450000, categoriaId: "comida", descripcion: "Almuerzo", fecha: HOY },
+      borrador: { tipo: "gasto", centavos: 450000, categoriaId: "debito", descripcion: "Almuerzo", fecha: HOY },
     });
+  });
+
+  it("si el campo de categoría no es una categoría, pasa a la descripción", () => {
+    expect(movimiento("gasto; 4500; comida; almuerzo").borrador).toMatchObject({ categoriaId: null, descripcion: "Comida almuerzo" });
   });
 
   it("ingreso; 250000; trabajo; sueldo", () => {
@@ -128,13 +136,13 @@ describe("interpretar: formato con punto y coma", () => {
 
   it("transferencia enviada; 12000; alquiler", () => {
     expect(movimiento("transferencia enviada; 12000; alquiler").borrador).toMatchObject({
-      tipo: "transferencia_enviada", centavos: 1200000, categoriaId: "vivienda", descripcion: "Alquiler",
+      tipo: "transferencia_enviada", centavos: 1200000, categoriaId: null, descripcion: "Alquiler",
     });
   });
 
-  it("gastos; transporte; este mes", () => {
-    expect(interpretar("gastos; transporte; este mes", ctx)).toEqual({
-      clase: "gastos_categoria", categoriaId: "transporte", periodo: "mes",
+  it("gastos; impuestos; este mes", () => {
+    expect(interpretar("gastos; impuestos; este mes", ctx)).toEqual({
+      clase: "gastos_categoria", categoriaId: "impuestos", periodo: "mes",
     });
   });
 
@@ -149,11 +157,15 @@ describe("interpretar: formato con punto y coma", () => {
 
 describe("interpretar: escritura libre", () => {
   it.each<[string, Partial<Borrador>]>([
-    ["gasté 4500 en almuerzo", { tipo: "gasto", centavos: 450000, categoriaId: "comida", descripcion: "Almuerzo" }],
-    ["Pagué 12 lucas de alquiler", { tipo: "gasto", centavos: 1200000, categoriaId: "vivienda", descripcion: "Alquiler" }],
+    ["gasté 4500 en almuerzo", { tipo: "gasto", centavos: 450000, categoriaId: null, descripcion: "Almuerzo" }],
+    ["Pagué 12 lucas de alquiler", { tipo: "gasto", centavos: 1200000, categoriaId: null, descripcion: "Alquiler" }],
+    ["pagué 4500 con débito en el súper", { tipo: "gasto", centavos: 450000, categoriaId: "debito", descripcion: "Súper" }],
+    ["almuerzo 6200 con tarjeta de crédito", { tipo: "gasto", centavos: 620000, categoriaId: "credito", descripcion: "Almuerzo" }],
+    ["pagué 2000 con QR", { tipo: "gasto", centavos: 200000, categoriaId: "qr", descripcion: "" }],
+    ["pagué 30000 del monotributo", { tipo: "gasto", centavos: 3000000, categoriaId: "impuestos", descripcion: "Monotributo" }],
     ["cobré 250.000 del sueldo", { tipo: "ingreso", centavos: 25000000, categoriaId: "ingresos", descripcion: "Sueldo" }],
-    ["taxi 3200", { tipo: "gasto", centavos: 320000, categoriaId: "transporte", descripcion: "Taxi" }],
-    ["me salió $8.500 el cine ayer", { tipo: "gasto", centavos: 850000, categoriaId: "entretenimiento", descripcion: "Cine", fecha: "2026-10-10" }],
+    ["taxi 3200", { tipo: "gasto", centavos: 320000, categoriaId: null, descripcion: "Taxi" }],
+    ["me salió $8.500 el cine ayer", { tipo: "gasto", centavos: 850000, categoriaId: null, descripcion: "Cine", fecha: "2026-10-10" }],
     ["me transfirieron 30000", { tipo: "transferencia_recibida", centavos: 3000000, categoriaId: null }],
     ["transferí 12000 a Juan", { tipo: "transferencia_enviada", centavos: 1200000, descripcion: "Juan" }],
     ["cobré 50000 de Marta", { tipo: "ingreso", centavos: 5000000, categoriaId: "ingresos", descripcion: "Marta" }],
@@ -168,9 +180,8 @@ describe("interpretar: escritura libre", () => {
     expect(movimiento("me pasaron 15000 por la cena").borrador.tipo).toBe("transferencia_recibida");
   });
 
-  it("sin tipo ni categoría reconocible, pregunta en vez de suponer", () => {
-    const r = movimiento("4500 cosas");
-    expect(r).toMatchObject({ falta: "tipo", opcionesTipo: ["gasto", "ingreso"], borrador: { tipo: null, centavos: 450000 } });
+  it("sin verbo, lo propone como gasto para confirmar", () => {
+    expect(movimiento("4500 cosas")).toMatchObject({ falta: null, borrador: { tipo: "gasto", centavos: 450000, descripcion: "Cosas" } });
   });
 
   it("una transferencia sin sentido claro pregunta si fue enviada o recibida", () => {
@@ -180,8 +191,8 @@ describe("interpretar: escritura libre", () => {
   });
 
   it("sin importe, lo pide", () => {
-    expect(movimiento("gasté en el súper")).toMatchObject({ falta: "importe", borrador: { tipo: "gasto", categoriaId: "comida" } });
-    expect(movimiento("taxi")).toMatchObject({ falta: "importe", borrador: { tipo: "gasto", categoriaId: "transporte" } });
+    expect(movimiento("gasté en el súper")).toMatchObject({ falta: "importe", borrador: { tipo: "gasto", descripcion: "Súper" } });
+    expect(movimiento("pagué con débito")).toMatchObject({ falta: "importe", borrador: { tipo: "gasto", categoriaId: "debito" } });
   });
 
   it("con dos números, ofrece ambos como importe", () => {
@@ -204,7 +215,7 @@ describe("interpretar: consultas y comandos", () => {
     ["Resumen de la semana", { clase: "resumen", periodo: "semana" }],
     ["¿cómo vengo?", { clase: "resumen", periodo: "mes" }],
     ["resumen del mes pasado", { clase: "resumen", periodo: "mes_pasado" }],
-    ["cuánto gasté en comida esta semana", { clase: "gastos_categoria", categoriaId: "comida", periodo: "semana" }],
+    ["cuánto gasté en impuestos esta semana", { clase: "gastos_categoria", categoriaId: "impuestos", periodo: "semana" }],
     ["cuánto gasté hoy", { clase: "resumen", periodo: "hoy" }],
     ["últimos movimientos", { clase: "ultimos" }],
     ["borrá el último", { clase: "deshacer" }],

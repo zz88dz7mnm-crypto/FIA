@@ -1,3 +1,4 @@
+import type { Categoria, ReglaPersonal } from "../motor/categorias";
 import { CATEGORIAS_DE_MUESTRA } from "../motor/muestras";
 import { ES_ENTRADA, type Mensaje, type Perfil, type Transaccion } from "../tipos";
 import type { Repositorio } from "./repositorio";
@@ -7,6 +8,8 @@ export function repositorioEnMemoria(): Repositorio {
   const perfil: Perfil = { nombre: null, zonaHoraria: "America/Argentina/Buenos_Aires" };
   const mensajes: Mensaje[] = [];
   const transacciones: Transaccion[] = [];
+  const categoriasPropias: Categoria[] = [];
+  const reglas: ReglaPersonal[] = [];
   const frascos: { id: string; nombre: string }[] = [];
   const aportes: { frascoId: string; centavos: number }[] = [];
   let reloj = 0;
@@ -21,10 +24,24 @@ export function repositorioEnMemoria(): Repositorio {
       perfil.nombre = nombre;
     },
     async categorias() {
-      return CATEGORIAS_DE_MUESTRA;
+      return [...CATEGORIAS_DE_MUESTRA, ...categoriasPropias];
+    },
+    async crearCategoria(nombre, clase) {
+      const categoria: Categoria = { id: nuevoId("c") + categoriasPropias.length, nombre, clase, palabrasClave: [] };
+      categoriasPropias.push(categoria);
+      return { ...categoria };
     },
     async reglas() {
-      return [];
+      return reglas.map((r) => ({ ...r }));
+    },
+    async guardarRegla(patron, categoriaId) {
+      const existente = reglas.find((r) => r.patron === patron);
+      if (existente) existente.categoriaId = categoriaId;
+      else reglas.push({ patron, categoriaId });
+    },
+    async borrarRegla(patron) {
+      const indice = reglas.findIndex((r) => r.patron === patron);
+      if (indice >= 0) reglas.splice(indice, 1);
     },
     async mensajes(limite) {
       return mensajes.slice(-limite);

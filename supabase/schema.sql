@@ -332,43 +332,34 @@ grant select, insert, update on public.transacciones to authenticated;
 grant select on public.auditoria to authenticated;
 
 -- ─────────────────── Categorías de arranque ───────────────────
--- Palabras en minúsculas y sin acentos: así las compara Fia.
-insert into public.categorias (usuario_id, nombre, clase, palabras_clave) values
-  (null, 'Comida', 'gasto', array[
-    'almuerzo', 'cena', 'desayuno', 'merienda', 'restaurante', 'resto', 'bar', 'cafe', 'cafeteria',
-    'supermercado', 'super', 'mercado', 'chino', 'verduleria', 'carniceria', 'panaderia', 'almacen',
-    'kiosco', 'delivery', 'pedidosya', 'pedidos ya', 'rappi', 'pizza', 'hamburguesa', 'helado',
-    'empanada', 'asado', 'cerveza', 'birra', 'vino', 'facturas', 'medialunas', 'sushi', 'milanesa']),
-  (null, 'Transporte', 'gasto', array[
-    'taxi', 'uber', 'cabify', 'didi', 'remis', 'colectivo', 'bondi', 'subte', 'tren', 'sube',
-    'nafta', 'combustible', 'estacionamiento', 'peaje', 'pasaje', 'transporte publico', 'gomeria',
-    'lavadero', 'patente', 'seguro del auto']),
-  (null, 'Vivienda', 'gasto', array[
-    'alquiler', 'expensas', 'servicios', 'luz', 'gas', 'agua', 'internet', 'wifi', 'telefono',
-    'celular', 'edesur', 'edenor', 'metrogas', 'aysa', 'abl', 'plomero', 'electricista', 'ferreteria']),
-  (null, 'Entretenimiento', 'gasto', array[
-    'cine', 'recital', 'streaming', 'netflix', 'spotify', 'disney', 'hbo', 'youtube', 'teatro',
-    'boliche', 'entrada', 'juego', 'steam', 'playstation', 'cancha', 'futbol']),
-  (null, 'Salud', 'gasto', array[
-    'farmacia', 'consulta', 'estudios', 'medico', 'doctor', 'dentista', 'odontologo', 'psicologo',
-    'terapia', 'prepaga', 'obra social', 'remedio', 'medicamento', 'gimnasio', 'gym', 'optica']),
-  (null, 'Compras', 'gasto', array[
-    'ropa', 'zapatillas', 'zapatos', 'remera', 'pantalon', 'campera', 'regalo', 'mercadolibre',
-    'mercado libre', 'shopping', 'perfume', 'peluqueria', 'barberia']),
-  (null, 'Educación', 'gasto', array[
-    'curso', 'facultad', 'universidad', 'colegio', 'cuota', 'libro', 'apuntes', 'fotocopias', 'clase']),
-  (null, 'Ingresos', 'ingreso', array[
-    'sueldo', 'salario', 'trabajo', 'aguinaldo', 'honorarios', 'freelance', 'devolucion',
-    'reintegro', 'venta', 'cobro', 'bono', 'comision'])
-on conflict do nothing;
+-- Son todas por tipo de operación: cómo se movió la plata, no en qué se gastó. Lo que no entra
+-- en ninguna queda "Sin clasificar" y se clasifica a mano (también con categorías propias).
+-- Las palabras van en minúsculas y sin acentos: así las compara Fia.
 
--- Categorías por tipo de operación: las usa Fia al leer capturas del banco o la billetera.
+-- Las categorías por rubro de versiones anteriores ya no se usan.
+update public.categorias set nombre = 'Pagos con tarjeta de débito'
+  where usuario_id is null and nombre = 'Pagos con tarjeta'
+    and not exists (
+      select 1 from public.categorias where usuario_id is null and nombre = 'Pagos con tarjeta de débito');
+
+delete from public.categorias
+  where usuario_id is null
+    and nombre in ('Comida', 'Transporte', 'Vivienda', 'Entretenimiento', 'Salud', 'Compras',
+                   'Educación', 'Pagos con tarjeta');
+
 insert into public.categorias (usuario_id, nombre, clase, palabras_clave) values
   (null, 'Transferencias', 'gasto', '{}'),
-  (null, 'Pagos con tarjeta', 'gasto', '{}'),
-  (null, 'Pagos con QR', 'gasto', '{}'),
+  (null, 'Pagos con tarjeta de débito', 'gasto', array['debito', 'tarjeta de debito']),
+  (null, 'Pagos con tarjeta de crédito', 'gasto', array['credito', 'tarjeta de credito', 'cuotas']),
+  (null, 'Pagos con QR', 'gasto', array['qr']),
+  (null, 'Pagos de servicios', 'gasto', array['pago de servicio', 'recarga', 'sube']),
+  (null, 'Extracciones de efectivo', 'gasto', array['extraccion', 'cajero', 'retiro de efectivo']),
   (null, 'Impuestos', 'gasto', array[
     'impuesto', 'monotributo', 'afip', 'arca', 'iibb', 'ingresos brutos', 'percepcion', 'sellos']),
-  (null, 'Rendimientos diarios', 'ingreso', '{}'),
+  (null, 'Ingresos', 'ingreso', array[
+    'sueldo', 'salario', 'trabajo', 'aguinaldo', 'honorarios', 'freelance', 'devolucion',
+    'reintegro', 'venta', 'cobro', 'bono', 'comision']),
+  (null, 'Rendimientos diarios', 'ingreso', array['rendimiento', 'intereses']),
   (null, 'Entre mis cuentas', 'gasto', '{}')
-on conflict do nothing;
+on conflict (coalesce(usuario_id, '00000000-0000-0000-0000-000000000000'::uuid), lower(nombre))
+  do update set clase = excluded.clase, palabras_clave = excluded.palabras_clave;

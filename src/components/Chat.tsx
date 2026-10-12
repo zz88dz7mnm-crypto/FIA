@@ -26,7 +26,12 @@ import { IconoEnviar, IconoImagen, IconoMas, IconoPanel } from "./iconos";
 import { TicketFrascos, TicketLista, TicketResumen } from "./Resumenes";
 import { Ticket, type AccionesDeTicket } from "./Ticket";
 
-const ATAJOS = ["Resumen del mes", "Últimos movimientos", "Mis frascos"];
+// Etiqueta corta en el botón, para que entren los tres sin deslizar; el mensaje que se manda es el completo.
+const ATAJOS: [etiqueta: string, mensaje: string][] = [
+  ["Resumen", "Resumen del mes"],
+  ["Últimos", "Últimos movimientos"],
+  ["Frascos", "Mis frascos"],
+];
 
 const ETIQUETA_DE_TIPO = {
   gasto: "Gasto",
@@ -210,20 +215,21 @@ export function Chat({ repo, rutaPanel, salir }: Props) {
     <div ref={raiz} className="fixed inset-x-0 top-0 h-dvh">
       {/* La barra de arriba y la de abajo flotan: la conversación pasa por detrás del vidrio. */}
       <header className="absolute inset-x-0 top-0 z-20 px-3 pt-[max(env(safe-area-inset-top),0.75rem)]">
-        <div className="cristal relative mx-auto flex max-w-3xl items-center gap-3 rounded-[26px] py-2 pr-2 pl-3">
-          <Fia className="size-10 shrink-0" />
+        <div className="cristal relative mx-auto flex max-w-3xl items-center gap-2.5 rounded-full py-1.5 pr-1.5 pl-2">
+          <Fia className="size-9 shrink-0" />
           <div className="min-w-0 flex-1">
-            <h1 className="text-[17px] leading-tight font-semibold tracking-[-0.01em]">Fia</h1>
-            <p className="truncate text-[13px] leading-tight text-tinta-suave" aria-live="polite">
+            <h1 className="text-[16px] leading-tight font-semibold tracking-[-0.01em]">Fia</h1>
+            <p className="truncate text-[12.5px] leading-tight text-tinta-suave" aria-live="polite">
               {estado}
             </p>
           </div>
           <Link
             href={rutaPanel}
-            className="flex h-10 items-center gap-1.5 rounded-full bg-black/5 px-3.5 text-[15px] font-medium text-acento transition-colors active:bg-black/10"
+            aria-label="Abrir el panel"
+            className="flex h-9 min-w-9 items-center justify-center gap-1.5 rounded-full bg-black/5 text-[15px] font-medium text-acento transition-colors active:bg-black/10 sm:px-3.5"
           >
             <IconoPanel className="size-[18px]" />
-            Panel
+            <span className="hidden sm:inline">Panel</span>
           </Link>
           {salir && (
             <button
@@ -231,7 +237,7 @@ export function Chat({ repo, rutaPanel, salir }: Props) {
               aria-label="Más opciones"
               aria-expanded={menuAbierto}
               onClick={() => setMenuAbierto((abierto) => !abierto)}
-              className="grid size-10 place-items-center rounded-full text-tinta-suave transition-colors active:bg-black/5"
+              className="grid size-9 place-items-center rounded-full text-tinta-suave transition-colors active:bg-black/5"
             >
               <IconoMas className="size-5" />
             </button>
@@ -249,8 +255,8 @@ export function Chat({ repo, rutaPanel, salir }: Props) {
         </div>
       </header>
 
-      <main className="h-full overflow-y-auto overscroll-contain px-4" aria-live="polite">
-        <div className="mx-auto max-w-3xl pt-[calc(max(env(safe-area-inset-top),0.75rem)+4.75rem)] pb-[calc(max(env(safe-area-inset-bottom),0.75rem)+8.25rem)]">
+      <main className="desvanecer h-full overflow-y-auto overscroll-contain px-4" aria-live="polite">
+        <div className="mx-auto max-w-3xl pt-[calc(max(env(safe-area-inset-top),0.75rem)+4.5rem)] pb-[calc(max(env(safe-area-inset-bottom),0.75rem)+7.75rem)]">
           {noCargo && (
             <p role="alert" className="cristal mx-auto mt-8 max-w-sm rounded-[24px] p-5 text-center text-[15px] leading-snug text-tinta-suave">
               {noCargo}
@@ -373,22 +379,22 @@ export function Chat({ repo, rutaPanel, salir }: Props) {
               </li>
             )}
           </ol>
-          <div ref={fin} className="h-px scroll-mb-40" />
+          <div ref={fin} className="h-px scroll-mb-36" />
         </div>
       </main>
 
       <footer className="absolute inset-x-0 bottom-0 z-20 px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)]">
         <div className="mx-auto max-w-3xl">
-          <div className="sin-barra -mx-3 mb-2 flex gap-2 overflow-x-auto px-3 py-1">
-            {ATAJOS.map((atajo) => (
+          <div className="mb-2 flex gap-2">
+            {ATAJOS.map(([etiqueta, mensaje]) => (
               <button
-                key={atajo}
+                key={etiqueta}
                 type="button"
                 disabled={ocupado || !sesion}
-                onClick={() => enviar(atajo)}
-                className="cristal h-9 shrink-0 rounded-full px-3.5 text-[14px] font-medium text-tinta active:bg-white disabled:opacity-50"
+                onClick={() => enviar(mensaje)}
+                className="cristal-leve h-8 rounded-full px-3.5 text-[13.5px] font-medium text-tinta-suave active:bg-white disabled:opacity-50"
               >
-                {atajo}
+                {etiqueta}
               </button>
             ))}
           </div>

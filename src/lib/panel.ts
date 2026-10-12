@@ -1,5 +1,6 @@
 import type { Categoria } from "./motor/categorias";
 import { sumarDias } from "./motor/fechas";
+import { palabras } from "./motor/texto";
 import { ES_ENTRADA, type Transaccion } from "./tipos";
 
 /** Cuentas del panel. Todas parten de movimientos confirmados: lo pendiente o anulado no suma. */
@@ -91,4 +92,59 @@ export function transferenciasPorPersona(confirmadas: Transaccion[]): Persona[] 
 /** "9 oct": fecha corta para tablas. */
 export function fechaCorta(iso: string): string {
   return `${Number(iso.slice(8, 10))} ${MESES_CORTOS[Number(iso.slice(5, 7)) - 1]}`;
+}
+
+/** Una porción del gráfico circular. El color es de la categoría: no cambia según el período ni el orden. */
+export type Porcion = { clave: string; nombre: string; centavos: number; parte: number; color: string };
+
+// Un color fijo por tipo de operación, en el orden de la paleta (ese orden es el que se validó
+// para que las porciones vecinas se distingan, también con daltonismo).
+const COLORES: [nombre: string, color: string][] = [
+  ["transferencias", "#2a78d6"],
+  ["pagos con tarjeta de debito", "#eb6834"],
+  ["pagos con qr", "#1baf7a"],
+  ["pagos de servicios", "#eda100"],
+  ["pagos con tarjeta de credito", "#e87ba4"],
+  ["impuestos", "#008300"],
+  ["extracciones de efectivo", "#4a3aa7"],
+];
+const COLOR_PROPIO = "#e34948";
+const COLOR_SIN_CLASIFICAR = "#8e8e93";
+const COLOR_OTRAS = "#c7c7cc";
+const PORCIONES_MAXIMAS = 6;
+
+/**
+ * Convierte los gastos por categoría en porciones: como mucho seis, en un orden fijo.
+ * Lo que no tiene color propio y las categorías más chicas se juntan en "Otras".
+ */
+export function porciones(grupos: GrupoDeGasto[]): Porcion[] {
+  const orden = COLORES.map(([nombre]) => nombre);
+  const propias = grupos.filter((g) => g.id !== null && !orden.includes(palabras(g.nombre)));
+  // De las categorías creadas a mano, solo la más grande lleva color; las demás van a "Otras".
+  const propiaConColor = propias[0]?.id;
+
+  const conColor: (Porcion & { lugar: number })[] = [];
+  let otras = 0;
+  for (const grupo of grupos) {
+    const lugar = orden.indexOf(palabras(grupo.nombre));
+    const base = { clave: grupo.id ?? "sin-clasificar", nombre: grupo.nombre, centavos: grupo.centavos, parte: grupo.parte };
+    if (grupo.id === null) conColor.push({ ...base, color: COLOR_SIN_CLASIFICAR, lugar: orden.length + 1 });
+    else if (lugar >= 0) conColor.push({ ...base, color: COLORES[lugar][1], lugar });
+    else if (grupo.id === propiaConColor) conColor.push({ ...base, color: COLOR_PROPIO, lugar: orden.length });
+    else otras += grupo.centavos;
+  }
+
+  // Si igual son demasiadas, las más chicas también se juntan.
+  const porTamanio = [...conColor].sort((a, b) => b.centavos - a.centavos);
+  const cupo = otras > 0 || porTamanio.length > PORCIONES_MAXIMAS ? PORCIONES_MAXIMAS - 1 : PORCIONES_MAXIMAS;
+  const visibles = new Set(porTamanio.slice(0, cupo).map((p) => p.clave));
+  otras += porTamanio.slice(cupo).reduce((suma, p) => suma + p.centavos, 0);
+
+  const total = grupos.reduce((suma, g) => suma + g.centavos, 0);
+  const resultado: Porcion[] = conColor
+    .filter((p) => visibles.has(p.clave))
+    .sort((a, b) => a.lugar - b.lugar)
+    .map(({ clave, nombre, centavos, parte, color }) => ({ clave, nombre, centavos, parte, color }));
+  if (otras > 0) resultado.push({ clave: "otras", nombre: "Otras", centavos: otras, parte: total ? otras / total : 0, color: COLOR_OTRAS });
+  return resultado;
 }

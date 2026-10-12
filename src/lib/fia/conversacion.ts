@@ -1,6 +1,6 @@
 import type { Repositorio, CambiosTransaccion } from "../datos/repositorio";
 import { extraerOperaciones } from "../motor/capturas";
-import { clasificar, type Categoria, type ReglaPersonal } from "../motor/categorias";
+import { clasificar, reglaPara, type Categoria, type ReglaPersonal } from "../motor/categorias";
 import { nombreDeMes, rangoDe, type Periodo } from "../motor/fechas";
 import { buscarFrasco, categoriaDeIngresos, completar, interpretar, type Borrador, type Contexto, type Intencion, type Tipo } from "../motor/interpretar";
 import { capitalizar, palabras } from "../motor/texto";
@@ -308,12 +308,11 @@ async function fraseDeAnotado(sesion: Sesion, t: Transaccion): Promise<string> {
 
   if (t.tipo === "gasto") {
     const categoria = nombreDeCategoria(sesion, t.categoriaId);
-    if (!categoria) return voz.anotadoSinCategoria;
-    const delMes = await sesion.repo.confirmadasEntre(mes.desde, mes.hasta);
-    const total = delMes
-      .filter((otra) => !ES_ENTRADA[otra.tipo] && otra.categoriaId === t.categoriaId)
-      .reduce((suma, otra) => suma + otra.centavos, 0);
-    return voz.anotadoEnCategoria(total, categoria);
+    const salidas = (await sesion.repo.confirmadasEntre(mes.desde, mes.hasta)).filter((otra) => !ES_ENTRADA[otra.tipo]);
+    const sumar = (movimientos: Transaccion[]) => movimientos.reduce((suma, otra) => suma + otra.centavos, 0);
+    return categoria
+      ? voz.anotadoEnCategoria(sumar(salidas.filter((otra) => otra.categoriaId === t.categoriaId)), categoria)
+      : voz.anotadoGasto(sumar(salidas));
   }
   if (t.tipo === "ingreso") {
     const delMes = await sesion.repo.confirmadasEntre(mes.desde, mes.hasta);
@@ -349,10 +348,11 @@ export async function recibirCaptura(sesion: Sesion, textoLeido: string): Promis
     // Sin sentido claro se guarda como enviada, pero el ticket obliga a elegir antes de anotar.
     const tipo = operacion.tipo ?? "transferencia_enviada";
     const fecha = operacion.fecha ?? hoy;
-    // Primero el tipo de operación que dice la captura; si no dice nada, las palabras del detalle.
+    // Primero lo que vos elegiste antes para ese detalle; después, el tipo de operación que dice la captura.
     const categoria =
+      sesion.categorias.find((c) => c.id === reglaPara(operacion.descripcion, sesion.reglas)) ??
       categoriaLlamada(sesion, operacion.rubro) ??
-      clasificar(operacion.descripcion, sesion.categorias, sesion.reglas) ??
+      clasificar(operacion.descripcion, sesion.categorias) ??
       (tipo === "ingreso" ? categoriaDeIngresos(sesion.categorias) : null);
     const detalle = palabras(operacion.descripcion);
     const repetidas = (await sesion.repo.parecidas({ tipo, centavos: operacion.centavos, fecha })).filter((otra) =>
@@ -400,9 +400,46 @@ export function confirmar(sesion: Sesion, id: string): Promise<Novedad> {
   return cambiar(sesion, id, { estado: "confirmada" }, (t) => fraseDeAnotado(sesion, t));
 }
 
-/** Guarda las correcciones del usuario y deja el movimiento confirmado. */
-export function editar(sesion: Sesion, id: string, cambios: Omit<CambiosTransaccion, "estado">, yaAnotado = false): Promise<Novedad> {
-  return cambiar(sesion, id, { ...cambios, estado: "confirmada" }, (t) => (yaAnotado ? voz.guardado : fraseDeAnotado(sesion, t)));
+/** Lo que se puede corregir de un movimiento. `categoriaNueva` crea una categoría propia y la usa. */
+export type CambiosDeEdicion = Omit<CambiosTransaccion, "estado"> & { categoriaNueva?: string };
+
+/**
+ * Guarda las correcciones del usuario y deja el movimiento confirmado. Si cambió la
+ * categoría, Fia lo recuerda: la próxima vez que vea ese detalle, lo clasifica igual.
+ */
+export async function editar(sesion: Sesion, id: string, cambios: CambiosDeEdicion, yaAnotado = false): Promise<Novedad> {
+  const { categoriaNueva, ...resto } = cambios;
+  const [previa] = await sesion.repo.transaccionesPorId([id]);
+
+  const nombreNuevo = categoriaNueva?.trim();
+  if (nombreNuevo) {
+    const entra = ES_ENTRADA[resto.tipo ?? previa?.tipo ?? "gasto"];
+    const existente = categoriaLlamada(sesion, nombreNuevo);
+    const categoria = existente ?? (await sesion.repo.crearCategoria(capitalizar(nombreNuevo), entra ? "ingreso" : "gasto"));
+    if (!existente) sesion.categorias = [...sesion.categorias, categoria];
+    resto.categoriaId = categoria.id;
+  }
+
+  const transaccion = await sesion.repo.actualizarTransaccion(id, { ...resto, estado: "confirmada" });
+  if (transaccion.frascoId || "frascoId" in resto) await refrescarFrascos(sesion);
+
+  let aprendido = "";
+  if (previa && "categoriaId" in resto && resto.categoriaId !== previa.categoriaId) {
+    const detalle = transaccion.contraparte ?? transaccion.descripcion;
+    const patron = palabras(detalle);
+    const categoria = nombreDeCategoria(sesion, transaccion.categoriaId);
+    if (patron && transaccion.categoriaId && categoria) {
+      await sesion.repo.guardarRegla(patron, transaccion.categoriaId);
+      sesion.reglas = [...sesion.reglas.filter((r) => r.patron !== patron), { patron, categoriaId: transaccion.categoriaId }];
+      aprendido = voz.reglaAprendida(detalle, categoria);
+    } else if (patron) {
+      await sesion.repo.borrarRegla(patron);
+      sesion.reglas = sesion.reglas.filter((r) => r.patron !== patron);
+    }
+  }
+
+  const frase = yaAnotado ? voz.guardado : await fraseDeAnotado(sesion, transaccion);
+  return { mensajes: [await decir(sesion, [frase, aprendido].filter(Boolean).join(" "))], transacciones: [transaccion] };
 }
 
 export function descartar(sesion: Sesion, id: string): Promise<Novedad> {

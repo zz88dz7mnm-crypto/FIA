@@ -1,17 +1,18 @@
 import type { Categoria } from "./categorias";
 
-/** Categorías de ejemplo para pruebas y para el modo demo. Las reales viven en la base. */
+/**
+ * Categorías de ejemplo para pruebas y para el modo demo; las reales viven en la base.
+ * Son todas por tipo de operación: cómo se movió la plata, no en qué se gastó.
+ */
 export const CATEGORIAS_DE_MUESTRA: Categoria[] = [
-  { id: "comida", nombre: "Comida", clase: "gasto", palabrasClave: ["almuerzo", "cena", "cafe", "supermercado", "super", "pizza", "empanada", "delivery", "bar"] },
-  { id: "transporte", nombre: "Transporte", clase: "gasto", palabrasClave: ["taxi", "uber", "nafta", "sube", "subte", "colectivo", "estacionamiento", "transporte publico"] },
-  { id: "vivienda", nombre: "Vivienda", clase: "gasto", palabrasClave: ["alquiler", "expensas", "luz", "gas", "internet"] },
-  { id: "entretenimiento", nombre: "Entretenimiento", clase: "gasto", palabrasClave: ["cine", "recital", "netflix", "spotify"] },
-  { id: "salud", nombre: "Salud", clase: "gasto", palabrasClave: ["farmacia", "medico", "obra social", "gimnasio"] },
-  { id: "ingresos", nombre: "Ingresos", clase: "ingreso", palabrasClave: ["sueldo", "trabajo", "aguinaldo", "devolucion", "venta"] },
   { id: "transferencias", nombre: "Transferencias", clase: "gasto", palabrasClave: [] },
-  { id: "tarjeta", nombre: "Pagos con tarjeta", clase: "gasto", palabrasClave: [] },
-  { id: "qr", nombre: "Pagos con QR", clase: "gasto", palabrasClave: [] },
+  { id: "debito", nombre: "Pagos con tarjeta de débito", clase: "gasto", palabrasClave: ["debito", "tarjeta de debito"] },
+  { id: "credito", nombre: "Pagos con tarjeta de crédito", clase: "gasto", palabrasClave: ["credito", "tarjeta de credito", "cuotas"] },
+  { id: "qr", nombre: "Pagos con QR", clase: "gasto", palabrasClave: ["qr"] },
+  { id: "servicios", nombre: "Pagos de servicios", clase: "gasto", palabrasClave: ["pago de servicio", "recarga", "sube"] },
+  { id: "extracciones", nombre: "Extracciones de efectivo", clase: "gasto", palabrasClave: ["extraccion", "cajero", "retiro de efectivo"] },
   { id: "impuestos", nombre: "Impuestos", clase: "gasto", palabrasClave: ["impuesto", "monotributo", "afip", "arca"] },
-  { id: "rendimientos", nombre: "Rendimientos diarios", clase: "ingreso", palabrasClave: [] },
+  { id: "ingresos", nombre: "Ingresos", clase: "ingreso", palabrasClave: ["sueldo", "trabajo", "aguinaldo", "devolucion", "venta"] },
+  { id: "rendimientos", nombre: "Rendimientos diarios", clase: "ingreso", palabrasClave: ["rendimiento"] },
   { id: "propias", nombre: "Entre mis cuentas", clase: "gasto", palabrasClave: [] },
 ];

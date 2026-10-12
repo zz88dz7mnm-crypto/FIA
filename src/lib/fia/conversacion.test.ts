@@ -55,18 +55,18 @@ describe("anotar un movimiento", () => {
   it("lo propone en revisión y recién cuenta al confirmarlo", async () => {
     const { fia, transaccion } = await decir("gasté 4500 en almuerzo");
     expect(fia.texto).toBe("¿Lo anoto así?");
-    expect(transaccion).toMatchObject({ estado: "en_revision", tipo: "gasto", centavos: 450000, categoriaId: "comida" });
+    expect(transaccion).toMatchObject({ estado: "en_revision", tipo: "gasto", centavos: 450000, categoriaId: null });
     expect(await repo.confirmadasEntre("2026-10-01", "2026-10-31")).toHaveLength(0);
 
     const confirmado = await confirmar(sesion, transaccion!.id);
     expect(confirmado.transacciones[0].estado).toBe("confirmada");
-    expect(confirmado.mensajes[0].texto).toBe("Anotado. Llevás $4.500 en Comida este mes.");
+    expect(confirmado.mensajes[0].texto).toBe("Anotado. Este mes ya salieron $4.500.");
   });
 
   it("acumula el total de la categoría en el mes", async () => {
-    await anotar("gasté 4500 en almuerzo");
-    const segundo = await anotar("cena 12.000");
-    expect(segundo.mensajes[0].texto).toBe("Anotado. Llevás $16.500 en Comida este mes.");
+    await anotar("pagué 4500 con débito en el súper");
+    const segundo = await anotar("cena 12.000 con débito");
+    expect(segundo.mensajes[0].texto).toBe("Anotado. Llevás $16.500 en Pagos con tarjeta de débito este mes.");
   });
 
   it("descartar no deja nada en los totales", async () => {
@@ -78,9 +78,11 @@ describe("anotar un movimiento", () => {
 
   it("editar guarda los cambios y confirma", async () => {
     const { transaccion } = await decir("gasté 4500 en almuerzo");
-    const editado = await editar(sesion, transaccion!.id, { centavos: 520000, categoriaId: "entretenimiento" });
-    expect(editado.transacciones[0]).toMatchObject({ estado: "confirmada", centavos: 520000, categoriaId: "entretenimiento" });
-    expect(editado.mensajes[0].texto).toBe("Anotado. Llevás $5.200 en Entretenimiento este mes.");
+    const editado = await editar(sesion, transaccion!.id, { centavos: 520000, categoriaId: "qr" });
+    expect(editado.transacciones[0]).toMatchObject({ estado: "confirmada", centavos: 520000, categoriaId: "qr" });
+    expect(editado.mensajes[0].texto).toBe(
+      "Anotado. Llevás $5.200 en Pagos con QR este mes. La próxima vez que aparezca «Almuerzo» lo pongo en Pagos con QR.",
+    );
   });
 
   it("anular lo saca de los totales sin borrarlo", async () => {
@@ -117,15 +119,15 @@ describe("anotar un movimiento", () => {
 
 describe("preguntas", () => {
   it("pide el importe y completa con la respuesta", async () => {
-    expect((await decir("taxi")).fia.texto).toBe("¿Cuánto fue?");
+    expect((await decir("gasté en taxi")).fia.texto).toBe("¿Cuánto fue?");
     const { fia, transaccion } = await decir("3200");
     expect(fia.datos.clase).toBe("propuesta");
-    expect(transaccion).toMatchObject({ tipo: "gasto", centavos: 320000, categoriaId: "transporte", descripcion: "Taxi" });
+    expect(transaccion).toMatchObject({ tipo: "gasto", centavos: 320000, descripcion: "Taxi" });
   });
 
-  it("pide el tipo cuando no hay cómo saberlo", async () => {
-    expect((await decir("4500 cosas")).fia.texto).toBe("¿Fue un gasto o un ingreso?");
-    const { transaccion } = await decir("gasto");
+  it("sin verbo lo propone como gasto, sin preguntar", async () => {
+    const { fia, transaccion } = await decir("4500 cosas");
+    expect(fia.datos.clase).toBe("propuesta");
     expect(transaccion).toMatchObject({ tipo: "gasto", centavos: 450000, descripcion: "Cosas" });
   });
 
@@ -139,7 +141,7 @@ describe("preguntas", () => {
     const { fia } = await decir("2 cafés 4500");
     expect(fia.texto).toBe("Veo más de un número. ¿Cuál es el importe?");
     const { transaccion } = await decir("$4.500");
-    expect(transaccion).toMatchObject({ centavos: 450000, descripcion: "2 cafés", categoriaId: "comida", tipo: "gasto" });
+    expect(transaccion).toMatchObject({ centavos: 450000, descripcion: "2 cafés", tipo: "gasto" });
   });
 
   it("primero el importe y después el tipo, si faltan los dos", async () => {
@@ -149,17 +151,17 @@ describe("preguntas", () => {
   });
 
   it("si la respuesta es otro mensaje, lo trata como nuevo", async () => {
-    await decir("taxi");
+    await decir("gasté en taxi");
     const { transaccion } = await decir("gasté 900 en café");
-    expect(transaccion).toMatchObject({ centavos: 90000, categoriaId: "comida" });
+    expect(transaccion).toMatchObject({ centavos: 90000, descripcion: "Café" });
   });
 });
 
 describe("consultas", () => {
   beforeEach(async () => {
-    await anotar("gasté 4500 en almuerzo");
-    await anotar("taxi 3200");
-    await anotar("pagué 120.000 de alquiler");
+    await anotar("pagué 4500 con débito en almuerzo");
+    await anotar("taxi 3200 con qr");
+    await anotar("transferí 120.000 a Carlos por el alquiler");
     await anotar("cobré 250 lucas de sueldo");
     await anotar("me transfirieron 30000");
     await decir("gasté 99999 en cine"); // queda en revisión: no cuenta
@@ -173,17 +175,17 @@ describe("consultas", () => {
         entradas: 28000000,
         salidas: 12770000,
         porCategoria: [
-          { nombre: "Vivienda", centavos: 12000000 },
-          { nombre: "Comida", centavos: 450000 },
-          { nombre: "Transporte", centavos: 320000 },
+          { nombre: "Transferencias", centavos: 12000000 },
+          { nombre: "Pagos con tarjeta de débito", centavos: 450000 },
+          { nombre: "Pagos con QR", centavos: 320000 },
         ],
       },
     });
   });
 
   it("gastos por categoría", async () => {
-    expect((await decir("gastos; transporte; este mes")).fia.texto).toBe("En Transporte gastaste $3.200 en octubre, en 1 movimiento.");
-    expect((await decir("cuánto gasté en salud hoy")).fia.texto).toBe("No anoté gastos de Salud hoy.");
+    expect((await decir("gastos; transferencias; este mes")).fia.texto).toBe("En Transferencias gastaste $120.000 en octubre, en 1 movimiento.");
+    expect((await decir("cuánto gasté en impuestos hoy")).fia.texto).toBe("No anoté gastos de Impuestos hoy.");
   });
 
   it("últimos movimientos y deshacer", async () => {
@@ -377,5 +379,49 @@ describe("/borrar-todo", () => {
     const { transaccion } = await decir("gasté 900 en café");
     expect(transaccion).toMatchObject({ centavos: 90000 });
     expect(await repo.movimientosEntre("2026-10-01", "2026-10-31")).toHaveLength(3);
+  });
+});
+
+describe("clasificación manual", () => {
+  it("al cambiar la categoría, la recuerda para la próxima vez", async () => {
+    const { transaccion } = await decir("gasté 4500 en almuerzo");
+    await editar(sesion, transaccion!.id, { categoriaId: "qr" });
+    expect((await repo.reglas())).toEqual([{ patron: "almuerzo", categoriaId: "qr" }]);
+    expect((await decir("almuerzo con Marta 5000")).transaccion?.categoriaId).toBe("qr");
+  });
+
+  it("se puede crear una categoría propia, y gana sobre lo que dice la captura", async () => {
+    const captura = "02 de octubre\n— Pagocon tarjeta de débito - $ 10.860,00\nCp*pack Claro";
+    const primera = await recibirCaptura(sesion, captura);
+    expect(primera.transacciones[0]).toMatchObject({ categoriaId: "debito", descripcion: "Cp*pack Claro" });
+
+    const editado = await editar(sesion, primera.transacciones[0].id, { categoriaNueva: "celular" });
+    const propia = sesion.categorias.find((c) => c.nombre === "Celular");
+    expect(propia).toBeDefined();
+    expect(editado.transacciones[0].categoriaId).toBe(propia!.id);
+    expect(editado.mensajes[0].texto).toContain("La próxima vez que aparezca «Cp*pack Claro» lo pongo en Celular.");
+
+    const segunda = await recibirCaptura(sesion, captura.replace("10.860,00", "11.000,00"));
+    expect(segunda.transacciones[0].categoriaId).toBe(propia!.id);
+  });
+
+  it("si ya existe una categoría con ese nombre, la reutiliza", async () => {
+    const { transaccion } = await decir("gasté 4500 en almuerzo");
+    await editar(sesion, transaccion!.id, { categoriaNueva: "impuestos" });
+    expect(sesion.categorias.filter((c) => c.nombre === "Impuestos")).toHaveLength(1);
+    expect((await repo.transaccionesPorId([transaccion!.id]))[0].categoriaId).toBe("impuestos");
+  });
+
+  it("sacarle la categoría hace que olvide la regla", async () => {
+    const { transaccion } = await decir("gasté 4500 en almuerzo");
+    await editar(sesion, transaccion!.id, { categoriaId: "qr" });
+    await editar(sesion, transaccion!.id, { categoriaId: null }, true);
+    expect(await repo.reglas()).toEqual([]);
+  });
+
+  it("editar otra cosa no crea reglas", async () => {
+    const { transaccion } = await decir("pagué 4500 con débito en el súper");
+    await editar(sesion, transaccion!.id, { centavos: 500000, categoriaId: "debito" });
+    expect(await repo.reglas()).toEqual([]);
   });
 });

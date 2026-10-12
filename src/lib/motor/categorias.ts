@@ -20,6 +20,13 @@ function posicion(frase: string, texto: string): number {
   return posiciones.length ? Math.min(...posiciones) : -1;
 }
 
+/** La categoría que el usuario eligió antes para un texto así, o null. Gana la regla más larga. */
+export function reglaPara(texto: string, reglas: ReglaPersonal[]): string | null {
+  const buscable = ` ${palabras(texto)} `;
+  const coinciden = reglas.filter((r) => posicion(r.patron, buscable) >= 0).sort((a, b) => b.patron.length - a.patron.length);
+  return coinciden[0]?.categoriaId ?? null;
+}
+
 /**
  * Sugiere una categoría para un texto. Si coinciden varias, gana la frase más
  * larga (más específica) y, a igualdad, la que aparece antes. Sin coincidencia

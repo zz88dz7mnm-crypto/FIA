@@ -190,7 +190,7 @@ describe("captura real de billetera", () => {
   it("clasifica por tipo de operación y guarda con quién fue", () => {
     expect(operaciones.map((o) => [o.rubro, o.tipo, o.descripcion])).toEqual([
       ["Transferencias", "transferencia_enviada", "Valentin Torres Gaitan"],
-      ["Pagos con tarjeta", "gasto", "Cp*pack Claro"],
+      ["Pagos con tarjeta de débito", "gasto", "Cp*pack Claro"],
       ["Entre mis cuentas", "transferencia_recibida", "Fondo"],
       ["Rendimientos diarios", "ingreso", "Rendimiento diario"],
       ["Entre mis cuentas", "transferencia_enviada", "Ameijeiras Juan Pedro"],

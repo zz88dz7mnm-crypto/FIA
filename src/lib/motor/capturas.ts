@@ -48,8 +48,12 @@ const RUBROS: [RegExp, string][] = [
   [/\brendimientos?\b|\bintereses\b/, "Rendimientos diarios"],
   [/\bimpuestos?\b|\bpercepcion(es)?\b|\bretencion(es)?\b|\bingresos brutos\b|\biibb\b|\bsellos\b|\bafip\b|\barca\b/, "Impuestos"],
   [/\bqr\b/, "Pagos con QR"],
-  [/\btarjetas?\b|\bdebito\b|\bcredito\b/, "Pagos con tarjeta"],
+  [/\bdebito\b/, "Pagos con tarjeta de débito"],
+  [/\bcredito\b|\bcuotas\b/, "Pagos con tarjeta de crédito"],
+  [/\bpagos? de servicios?\b|\brecargas?\b|\bsube\b/, "Pagos de servicios"],
+  [/\bextraccion(es)?\b|\bretiros? de efectivo\b|\bcajero\b/, "Extracciones de efectivo"],
   [/\btransferencias?\b|\btransferiste\b|\bte transfirio\b/, "Transferencias"],
+  [/\bingreso de dinero\b|\bingresaste\b|\bsueldo\b|\bhaberes\b|\bacreditacion\b|\bdevolucion\b|\breintegro\b/, "Ingresos"],
 ];
 const RUBRO_INTERNO = "Entre mis cuentas";
 
@@ -217,8 +221,10 @@ export function extraerOperaciones(textoOCR: string, ctx: Contexto): OperacionLe
   const todos = importes.flat();
   if (!todos.length) return [];
 
+  // Es un comprobante si lo dice, o si el mismo importe aparece repetido (el monto y su "Total").
+  // Un solo importe sin más señales se lee como un renglón de listado, que conserva el detalle.
   const distintos = new Set(todos.map((i) => i.centavos)).size;
-  if (distintos === 1 || COMPROBANTE.test(planas.join("\n"))) {
+  if (COMPROBANTE.test(planas.join("\n")) || (distintos === 1 && todos.length > 1)) {
     const sinCargos = importes.filter((_, i) => !CARGOS.test(planas[i])).flat();
     return [leerComprobante(lineas, planas, sinCargos.length ? sinCargos : todos, ctx)];
   }

@@ -76,6 +76,20 @@ export function repositorioSupabase(db: SupabaseClient, usuarioId: string): Repo
       const filas = exigir<FilaCategoria[]>(await db.from("categorias").select("id, nombre, clase, palabras_clave").order("nombre"));
       return filas.map((f) => ({ id: f.id, nombre: f.nombre, clase: f.clase, palabrasClave: f.palabras_clave ?? [] }));
     },
+    async crearCategoria(nombre, clase) {
+      const fila = exigir<FilaCategoria>(
+        await db.from("categorias").insert({ nombre, clase }).select("id, nombre, clase, palabras_clave").single(),
+      );
+      return { id: fila.id, nombre: fila.nombre, clase: fila.clase, palabrasClave: fila.palabras_clave ?? [] };
+    },
+    async guardarRegla(patron, categoriaId) {
+      exigir<unknown>(
+        await db.from("reglas_categoria").upsert({ patron, categoria_id: categoriaId }, { onConflict: "usuario_id,patron" }).select("id"),
+      );
+    },
+    async borrarRegla(patron) {
+      exigir<unknown>(await db.from("reglas_categoria").delete().eq("patron", patron).select("id"));
+    },
     async reglas() {
       const filas = exigir<FilaRegla[]>(await db.from("reglas_categoria").select("patron, categoria_id"));
       return filas.map((f) => ({ patron: f.patron, categoriaId: f.categoria_id }));
